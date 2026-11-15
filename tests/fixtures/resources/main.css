@@ -1,0 +1,12 @@
+@import url("parts/grid.css");
+/* url(/img/commented.png) */
+@font-face {
+    font-family: "Shop";
+    src: url("../fonts/shop.woff2") format("woff2"), url(../fonts/shop.ttf) format("truetype");
+}
+@font-face {
+    font-family: "Icons";
+    src: url("../fonts/icons.eot");
+    src: url("../fonts/icons.eot?#iefix") format("embedded-opentype"), url("../fonts/icons.svg#icons") format("svg");
+}
+.icon { background: url('../img/sprite.svg'); }

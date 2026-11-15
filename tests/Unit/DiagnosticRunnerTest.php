@@ -264,14 +264,4 @@ final class DiagnosticRunnerTest extends TestCase
             $this->assertNotSame('', $step['title']);
         }
     }
-
-    public function testDefaultStepsAreSkippedUntilImplemented(): void
-    {
-        $this->runSteps(getDiagnosticSteps());
-
-        foreach ($this->finished as $finished) {
-            $this->assertSame('skipped', $finished['status']);
-            $this->assertSame(STEP_NOT_IMPLEMENTED_MESSAGE, $finished['message']);
-        }
-    }
 }

@@ -39,3 +39,29 @@ function insertFinding(int $diagnosticId, array $finding): int
 
     return (int) $pdo->lastInsertId();
 }
+
+/**
+ * Находки диагностики: от критичных к информации, внутри — по порядку записи. `evidence` — массив или null.
+ *
+ * @return list<array<string, mixed>>
+ */
+function getFindingsByDiagnostic(int $diagnosticId): array
+{
+    $statement = getPdo()->prepare(
+        "SELECT id, page_id, source, category, severity, title, details, location, evidence, fingerprint
+         FROM findings
+         WHERE diagnostic_id = :diagnostic_id
+         ORDER BY FIELD(severity, 'critical', 'high', 'medium', 'low', 'info'), id"
+    );
+    $statement->execute(['diagnostic_id' => $diagnosticId]);
+
+    return array_map(
+        static function (array $row): array {
+            $evidence = is_string($row['evidence']) ? json_decode($row['evidence'], true) : null;
+            $row['evidence'] = is_array($evidence) ? $evidence : null;
+
+            return $row;
+        },
+        $statement->fetchAll()
+    );
+}

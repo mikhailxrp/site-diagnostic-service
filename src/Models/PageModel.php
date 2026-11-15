@@ -31,3 +31,21 @@ function insertCheckedPage(int $diagnosticId, array $page): int
 
     return (int) $pdo->lastInsertId();
 }
+
+/**
+ * Проверенные страницы диагностики в порядке записи.
+ *
+ * @return list<array<string, mixed>>
+ */
+function getCheckedPagesByDiagnostic(int $diagnosticId): array
+{
+    $statement = getPdo()->prepare(
+        'SELECT id, url, page_type, found_by, http_code, response_ms, blocked
+         FROM checked_pages
+         WHERE diagnostic_id = :diagnostic_id
+         ORDER BY id'
+    );
+    $statement->execute(['diagnostic_id' => $diagnosticId]);
+
+    return $statement->fetchAll();
+}

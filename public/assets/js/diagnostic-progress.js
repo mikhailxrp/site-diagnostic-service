@@ -1,10 +1,12 @@
 /**
  * Экран диагностики: опрашивает /diagnostics/{id}/status раз в 2 с и обновляет прогресс и шаги.
- * Следующий запрос уходит только после ответа на предыдущий; на done / failed опрос прекращается.
+ * Следующий запрос уходит только после ответа на предыдущий; на done / failed опрос прекращается
+ * и страница перезагружается — отчёт (в т. ч. частичный при failed) выводит сервер.
  */
 
 const POLL_INTERVAL_MS = 2000;
 const HTTP_NOT_FOUND = 404;
+const REPORT_STATUSES = ['done', 'failed'];
 
 const MESSAGE_CONNECTION_LOST = 'Нет связи с сервером — пробую снова…';
 const MESSAGE_NOT_FOUND = 'Диагностика не найдена — обновление остановлено.';
@@ -48,7 +50,7 @@ const renderState = (root, statusBadge, state) => {
 
   root.querySelector('[data-error-message]').textContent = state.errorMessage ?? '';
   root.querySelector('[data-result-failed]').hidden = state.status !== 'failed';
-  root.querySelector('[data-result-done]').hidden = state.status !== 'done';
+  root.querySelector('[data-result-report]').hidden = !REPORT_STATUSES.includes(state.status);
 };
 
 const startPolling = (root, statusBadge) => {
@@ -68,6 +70,9 @@ const startPolling = (root, statusBadge) => {
       hideWarning(root);
       renderState(root, statusBadge, state);
       if (state.isFinished) {
+        if (REPORT_STATUSES.includes(state.status)) {
+          window.location.reload();
+        }
         return;
       }
     } catch {

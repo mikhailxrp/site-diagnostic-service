@@ -120,7 +120,7 @@
 | diagnostic_id | INT NOT NULL FK → diagnostics.id ON DELETE CASCADE | |
 | page_id | INT NULL FK → checked_pages.id ON DELETE SET NULL | на какой странице найдено |
 | source | ENUM('check','ai') NOT NULL | кто нашёл: код или ИИ |
-| category | VARCHAR(50) NOT NULL | `availability`, `ssl`, `broken_resource`, `php_error`, `js_error`, `failed_request`, `outdated`, `vulnerability`, `exposed_file`, `seo`, `speed`, `checkout`, `layout`, `hypothesis` |
+| category | VARCHAR(50) NOT NULL | `availability`, `ssl`, `broken_resource`, `php_error`, `mixed_content`, `js_error`, `failed_request`, `outdated`, `vulnerability`, `exposed_file`, `seo`, `speed`, `checkout`, `layout`, `hypothesis` |
 | severity | ENUM('critical','high','medium','low','info') NOT NULL | |
 | title | VARCHAR(255) NOT NULL | коротко, для списка |
 | details | TEXT NULL | подробности (тех. язык) |

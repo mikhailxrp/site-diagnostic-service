@@ -126,6 +126,25 @@ $tables = [
                 REFERENCES checked_pages (id) ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         SQL,
+
+    // Фаза 1: найденный стек (latest_version заполняется в фазе 2)
+    'stack_items' => <<<SQL
+        CREATE TABLE IF NOT EXISTS stack_items (
+            id             INT NOT NULL AUTO_INCREMENT,
+            diagnostic_id  INT NOT NULL,
+            category       ENUM('cms','server','php','cdn','js_library','theme','plugin','analytics','other') NOT NULL,
+            name           VARCHAR(150) NOT NULL,
+            version        VARCHAR(50) NULL,
+            latest_version VARCHAR(50) NULL,
+            confidence     ENUM('high','medium','low') NOT NULL,
+            evidence       JSON NOT NULL,
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            INDEX idx_stack_items_diagnostic (diagnostic_id),
+            CONSTRAINT fk_stack_items_diagnostic FOREIGN KEY (diagnostic_id)
+                REFERENCES diagnostics (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        SQL,
 ];
 
 // ─── Установка ─────────────────────────────────────────────────────────────────

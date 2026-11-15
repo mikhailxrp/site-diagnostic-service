@@ -17,6 +17,7 @@ const FINDING_DEFAULT_SEVERITY = [
     'ssl'             => 'high',
     'broken_resource' => 'medium',
     'php_error'       => 'high',
+    'mixed_content'   => 'high', // активный контент; пассивный (картинки) проверка помечает `low`
     'js_error'        => 'medium',
     'failed_request'  => 'medium',
     'outdated'        => 'medium',

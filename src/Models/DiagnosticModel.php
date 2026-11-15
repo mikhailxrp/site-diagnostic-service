@@ -143,6 +143,26 @@ function updateDiagnosticProgress(int $id, int $progress): void
     $statement->execute(['progress' => $progress, 'id' => $id]);
 }
 
+/**
+ * Дописывает сводку в `summary_json` (JSON_MERGE_PATCH): ключи других шагов и фаз сохраняются.
+ *
+ * @param array<string, mixed> $summary
+ */
+function updateDiagnosticSummary(int $id, array $summary): void
+{
+    $json = json_encode(
+        $summary,
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR
+    );
+
+    $statement = getPdo()->prepare(
+        "UPDATE diagnostics
+         SET summary_json = JSON_MERGE_PATCH(COALESCE(summary_json, JSON_OBJECT()), CAST(:summary AS JSON))
+         WHERE id = :id"
+    );
+    $statement->execute(['summary' => $json, 'id' => $id]);
+}
+
 function touchDiagnosticHeartbeat(int $id): void
 {
     $statement = getPdo()->prepare('UPDATE diagnostics SET heartbeat_at = NOW() WHERE id = :id');

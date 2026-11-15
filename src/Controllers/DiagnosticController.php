@@ -7,13 +7,17 @@ namespace App\Controllers;
 use Throwable;
 
 require_once ROOT_PATH . '/src/Models/DiagnosticModel.php';
+require_once ROOT_PATH . '/src/Models/FindingModel.php';
+require_once ROOT_PATH . '/src/Models/PageModel.php';
+require_once ROOT_PATH . '/src/Models/StackModel.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticRunner.php';
 require_once ROOT_PATH . '/src/Services/JobLauncher.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
 require_once ROOT_PATH . '/src/Services/UrlValidator.php';
+require_once ROOT_PATH . '/src/Services/ReportBuilder.php';
 
 /**
- * Запуск диагностики из формы, экран прогресса и JSON для опроса.
+ * Запуск диагностики из формы, экран прогресса с отчётом и JSON для опроса.
  */
 final class DiagnosticController
 {
@@ -39,7 +43,7 @@ final class DiagnosticController
         $diagnosticId = parseDiagnosticId($id);
 
         try {
-            $diagnostic = $diagnosticId !== null ? $this->loadStatus($diagnosticId) : null;
+            $row = $diagnosticId !== null ? $this->loadDiagnostic($diagnosticId) : null;
         } catch (Throwable $e) {
             logException($e, ['diagnostic_id' => $diagnosticId]);
             http_response_code(self::HTTP_SERVER_ERROR);
@@ -47,17 +51,24 @@ final class DiagnosticController
             return;
         }
 
-        if ($diagnostic === null) {
+        if ($row === null) {
             http_response_code(self::HTTP_NOT_FOUND);
             $this->renderEmpty('Диагностика не найдена', 'Проверьте ссылку: такой диагностики нет.');
             return;
         }
 
+        $diagnostic = buildDiagnosticStatus($row, getDiagnosticSteps());
+        $hasReport  = in_array($diagnostic['status'], REPORT_STATUSES, true);
+        $report     = $hasReport ? $this->loadReport($row) : null;
+
         render('pages/diagnostic', [
-            'title'      => 'Диагностика #' . $diagnostic['id'],
-            'activeMenu' => 'new',
-            'diagnostic' => $diagnostic,
-            'statusUrl'  => '/diagnostics/' . $diagnostic['id'] . '/status',
+            'title'       => 'Диагностика #' . $diagnostic['id'],
+            'activeMenu'  => 'new',
+            'diagnostic'  => $diagnostic,
+            'statusUrl'   => '/diagnostics/' . $diagnostic['id'] . '/status',
+            'hasReport'   => $hasReport,
+            'report'      => $report,
+            'reportError' => $hasReport && $report === null,
         ]);
     }
 
@@ -128,14 +139,47 @@ final class DiagnosticController
     /**
      * Зависшая без heartbeat диагностика помечается прерванной ещё до показа.
      *
+     * @return array<string, mixed>|null строка `diagnostics` + `steps`
+     */
+    private function loadDiagnostic(int $diagnosticId): ?array
+    {
+        refreshStaleDiagnostic($diagnosticId);
+
+        return getDiagnosticWithSteps($diagnosticId);
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     private function loadStatus(int $diagnosticId): ?array
     {
-        refreshStaleDiagnostic($diagnosticId);
-        $diagnostic = getDiagnosticWithSteps($diagnosticId);
+        $diagnostic = $this->loadDiagnostic($diagnosticId);
 
         return $diagnostic !== null ? buildDiagnosticStatus($diagnostic, getDiagnosticSteps()) : null;
+    }
+
+    /**
+     * Отчёт из находок, стека и страниц. null — не удалось прочитать (ошибка в журнале), прогресс всё равно виден.
+     *
+     * @param array<string, mixed> $diagnostic строка `diagnostics` + `steps`
+     * @return array<string, mixed>|null
+     */
+    private function loadReport(array $diagnostic): ?array
+    {
+        $diagnosticId = (int) $diagnostic['id'];
+
+        try {
+            return buildReport(
+                $diagnostic,
+                getFindingsByDiagnostic($diagnosticId),
+                getStackItemsByDiagnostic($diagnosticId),
+                getCheckedPagesByDiagnostic($diagnosticId)
+            );
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId]);
+
+            return null;
+        }
     }
 
     /**

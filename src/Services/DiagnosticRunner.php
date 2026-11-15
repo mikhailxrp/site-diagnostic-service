@@ -10,6 +10,15 @@ declare(strict_types=1);
 
 require_once ROOT_PATH . '/src/Models/DiagnosticModel.php';
 require_once ROOT_PATH . '/src/Models/FindingModel.php';
+require_once ROOT_PATH . '/src/Models/PageModel.php';
+require_once ROOT_PATH . '/src/Models/StackModel.php';
+require_once ROOT_PATH . '/src/Services/HttpClient.php';
+require_once ROOT_PATH . '/src/Services/Checks/AvailabilityCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/SslCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/StackCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/ResourceCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/PhpErrorCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/MixedContentCheck.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
 const STEP_MESSAGE_MAX_LENGTH = 1000; // как diagnostic_steps.message VARCHAR(1000)
@@ -20,7 +29,6 @@ const STEP_STATUS_DONE    = 'done';
 const STEP_STATUS_SKIPPED = 'skipped';
 const STEP_STATUS_FAILED  = 'failed';
 
-const STEP_NOT_IMPLEMENTED_MESSAGE = 'Проверка появится в следующей версии.';
 const STEP_STOPPED_MESSAGE         = 'Пропущено: шаг «%s» остановил проверку.';
 
 /**
@@ -32,17 +40,108 @@ const STEP_STOPPED_MESSAGE         = 'Пропущено: шаг «%s» оста
  */
 function getDiagnosticSteps(): array
 {
-    // До тасков 3–5 настоящих проверок нет: честно «пропущено», а не «готово»
-    $notImplemented = static fn (array $context): array => [
-        'status'  => STEP_STATUS_SKIPPED,
-        'message' => STEP_NOT_IMPLEMENTED_MESSAGE,
-    ];
-
     return [
-        ['code' => 'availability', 'title' => 'Доступность сайта', 'handler' => $notImplemented],
-        ['code' => 'stack',        'title' => 'Определение стека', 'handler' => $notImplemented],
-        ['code' => 'resources',    'title' => 'Битые ресурсы',     'handler' => $notImplemented],
+        ['code' => 'availability', 'title' => 'Доступность сайта', 'handler' => 'runAvailabilityStep'],
+        ['code' => 'stack',        'title' => 'Определение стека', 'handler' => 'runStackStep'],
+        ['code' => 'resources',    'title' => 'Битые ресурсы',     'handler' => 'runResourcesStep'],
     ];
+}
+
+/**
+ * Шаг `availability` с настоящей сетью и БД: главная — в `checked_pages`, сводка — в `summary_json`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runAvailabilityStep(array $context): array
+{
+    $result = runAvailabilityCheck(
+        $context,
+        static fn (string $url): array => httpRequest($url),
+        static fn (string $host, bool $trusted): array => inspectSslCertificate($host, $trusted)
+    );
+
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $home = $result['facts']['home'];
+
+    $pageId = insertCheckedPage($diagnosticId, [
+        'url'         => $home['final_url'],
+        'page_type'   => 'home',
+        'found_by'    => 'start',
+        'http_code'   => $home['status'],
+        'response_ms' => $home['time_ms'],
+    ]);
+    $result['facts']['home']['page_id'] = $pageId;
+    $result['findings'] = assignPageIdToFindings($result['findings'], $pageId, [$home['url'], $home['final_url']]);
+
+    updateDiagnosticSummary($diagnosticId, $result['summary']);
+
+    return $result;
+}
+
+/**
+ * Шаг `stack` с настоящей сетью и БД: элементы стека — в `stack_items`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runStackStep(array $context): array
+{
+    $result = runStackCheck($context, static fn (string $url): array => httpRequest($url));
+
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    foreach ($result['facts']['items'] ?? [] as $item) {
+        insertStackItem($diagnosticId, $item);
+    }
+
+    return $result;
+}
+
+/**
+ * Шаг `resources` с настоящей сетью: битые ресурсы, PHP-ошибки и mixed content главной. Находки сохраняет
+ * `runDiagnostic()`; во время долгой проверки обновляется heartbeat, чтобы диагностику не сочли зависшей.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runResourcesStep(array $context): array
+{
+    $diagnosticId = (int) $context['diagnostic']['id'];
+
+    $result = runResourceCheck(
+        $context,
+        static fn (string $url, string $method): array => httpRequest($url, $method),
+        static fn (int $checked) => touchDiagnosticHeartbeat($diagnosticId)
+    );
+
+    return addPageErrorFindings($result, $context['facts']['availability']['home'] ?? []);
+}
+
+/**
+ * Дополняет результат проверки ресурсов PHP-ошибками из HTML главной и mixed content, пересчитывает сообщение.
+ *
+ * @param array<string, mixed> $result результат `runResourceCheck()`
+ * @param array<string, mixed> $home   главная из фактов шага `availability`
+ * @return array<string, mixed>
+ */
+function addPageErrorFindings(array $result, array $home): array
+{
+    if ($result['status'] !== STEP_STATUS_DONE) {
+        return $result;
+    }
+
+    $pageUrl = (string) $result['facts']['page_url'];
+    $pageId = isset($home['page_id']) ? (int) $home['page_id'] : null;
+    $resources = $result['facts']['resources'];
+
+    $phpErrors = findPhpErrors((string) ($home['body'] ?? ''), $pageUrl, $pageId);
+    $mixedContent = findMixedContent($pageUrl, $resources, $pageId);
+    $broken = count($result['findings']);
+
+    $result['findings'] = [...$result['findings'], ...$phpErrors, ...$mixedContent];
+    $result['message'] = buildResourcesStepMessage(count($resources), $broken, count($phpErrors), count($mixedContent));
+
+    return $result;
 }
 
 /**

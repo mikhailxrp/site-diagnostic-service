@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 /**
- * Экран диагностики: общий прогресс, статусы шагов, итог. Обновляется опросом (diagnostic-progress.js).
+ * Экран диагностики: общий прогресс, статусы шагов, отчёт. Обновляется опросом (diagnostic-progress.js),
+ * по завершении страница перезагружается и отчёт выводит сервер.
  * Ожидает: $title, $activeMenu, $diagnostic (результат buildDiagnosticStatus() или null — не найдена / ошибка),
- * $statusUrl (если $diagnostic есть), $emptyText (если $diagnostic = null).
+ * $statusUrl, $hasReport, $report (результат buildReport() или null), $reportError (если $diagnostic есть),
+ * $emptyText (если $diagnostic = null).
  */
 
 render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
@@ -84,15 +86,165 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                         </div>
                     </div>
                 </div>
-                <div class="col-12" data-result-done<?= $diagnostic['status'] === 'done' ? '' : ' hidden' ?>>
-                    <section class="card" aria-labelledby="diagnostic-report-title">
-                        <div class="card-header">
-                            <h2 class="card-title" id="diagnostic-report-title">Отчёт</h2>
+                <div class="col-12" data-result-report<?= $hasReport ? '' : ' hidden' ?>>
+                    <?php if ($reportError) : ?>
+                        <div class="alert alert-danger mb-0" role="alert">
+                            <div class="alert-description">Не удалось загрузить отчёт. Подробности в журнале.</div>
                         </div>
-                        <div class="card-body">
-                            <p class="text-secondary mb-0">Отчёт появится в Фазе 1.</p>
+                    <?php elseif ($report === null) : ?>
+                        <p class="text-secondary mb-0">Готовлю отчёт…</p>
+                    <?php else : ?>
+                        <?php if ($report['partial']) : ?>
+                            <div class="alert alert-warning" role="status">
+                                <div class="alert-description">
+                                    Отчёт неполный: диагностика прервана, показано то, что успело собраться.
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                        <div class="row row-cards">
+                            <div class="col-12 col-lg-6">
+                                <section class="card" aria-labelledby="report-summary-title">
+                                    <div class="card-header">
+                                        <h2 class="card-title" id="report-summary-title">Сводка</h2>
+                                    </div>
+                                    <?php if ($report['summary'] === null) : ?>
+                                        <div class="card-body">
+                                            <p class="text-secondary mb-0">Нет данных: доступность сайта не проверена.</p>
+                                        </div>
+                                    <?php else : ?>
+                                        <div class="card-body">
+                                            <?php foreach ($report['summary']['warnings'] as $warning) : ?>
+                                                <div class="alert alert-warning" role="status">
+                                                    <div class="alert-description"><?= e($warning) ?></div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                            <dl class="datagrid mb-0">
+                                                <?php foreach ($report['summary']['rows'] as $row) : ?>
+                                                    <div class="datagrid-item">
+                                                        <dt class="datagrid-title"><?= e($row['label']) ?></dt>
+                                                        <dd class="datagrid-content text-break mb-0">
+                                                            <?php if ($row['badgeClass'] !== null) : ?>
+                                                                <span class="badge <?= e($row['badgeClass']) ?> text-wrap text-start"><?= e($row['value']) ?></span>
+                                                            <?php else : ?>
+                                                                <?= e($row['value']) ?>
+                                                            <?php endif; ?>
+                                                        </dd>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </dl>
+                                        </div>
+                                        <?php if ($report['summary']['redirects'] !== []) : ?>
+                                            <ul class="list-group list-group-flush">
+                                                <li class="list-group-header d-block" role="heading" aria-level="3">Цепочка редиректов главной</li>
+                                                <?php foreach ($report['summary']['redirects'] as $redirect) : ?>
+                                                    <li class="list-group-item small text-break">
+                                                        <span class="badge bg-yellow-lt"><?= e($redirect['status']) ?></span>
+                                                        <?= e($redirect['url']) ?> → <?= e($redirect['location']) ?>
+                                                    </li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        <?php endif; ?>
+                                        <?php if ($report['summary']['variants'] !== []) : ?>
+                                            <ul class="list-group list-group-flush">
+                                                <li class="list-group-header d-block" role="heading" aria-level="3">Варианты адреса</li>
+                                                <?php foreach ($report['summary']['variants'] as $variant) : ?>
+                                                    <li class="list-group-item small">
+                                                        <div class="d-flex flex-wrap align-items-center gap-2">
+                                                            <span class="text-break"><?= e($variant['url']) ?></span>
+                                                            <span class="badge <?= e($variant['badgeClass']) ?> text-wrap text-start ms-auto"><?= e($variant['value']) ?></span>
+                                                        </div>
+                                                        <?php if ($variant['finalUrl'] !== null) : ?>
+                                                            <div class="text-secondary text-break">→ <?= e($variant['finalUrl']) ?></div>
+                                                        <?php endif; ?>
+                                                    </li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                </section>
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <section class="card" aria-labelledby="report-stack-title">
+                                    <div class="card-header">
+                                        <h2 class="card-title" id="report-stack-title">Стек</h2>
+                                    </div>
+                                    <?php if ($report['stackGroups'] === []) : ?>
+                                        <div class="card-body">
+                                            <p class="text-secondary mb-0">Стек определить не удалось.</p>
+                                        </div>
+                                    <?php else : ?>
+                                        <?php foreach ($report['stackGroups'] as $stackGroup) : ?>
+                                            <ul class="list-group list-group-flush">
+                                                <li class="list-group-header d-block" role="heading" aria-level="3"><?= e($stackGroup['label']) ?></li>
+                                                <?php foreach ($stackGroup['items'] as $stackItem) : ?>
+                                                    <?php render('components/stack-item', ['stackItem' => $stackItem]); ?>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                </section>
+                            </div>
+                            <div class="col-12">
+                                <section class="card" aria-labelledby="report-findings-title">
+                                    <div class="card-header">
+                                        <h2 class="card-title" id="report-findings-title">Находки</h2>
+                                        <div class="card-actions">
+                                            <span class="badge bg-secondary-lt"><?= e($report['findingCount']) ?></span>
+                                        </div>
+                                    </div>
+                                    <?php if ($report['findingGroups'] === []) : ?>
+                                        <div class="card-body">
+                                            <div class="empty">
+                                                <div class="empty-icon"><i class="ti ti-circle-check icon text-green" aria-hidden="true"></i></div>
+                                                <p class="empty-title">Проблем не найдено</p>
+                                                <?php if ($report['partial']) : ?>
+                                                    <p class="empty-subtitle text-secondary">Отчёт неполный: проверено не всё.</p>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    <?php else : ?>
+                                        <?php foreach ($report['findingGroups'] as $findingGroup) : ?>
+                                            <ul class="list-group list-group-flush">
+                                                <li class="list-group-header d-flex align-items-center gap-2" role="heading" aria-level="3">
+                                                    <?= e($findingGroup['label']) ?>
+                                                    <span class="badge <?= e($findingGroup['badgeClass']) ?>"><?= e($findingGroup['count']) ?></span>
+                                                </li>
+                                                <?php foreach ($findingGroup['items'] as $finding) : ?>
+                                                    <?php render('components/finding', ['finding' => $finding]); ?>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                </section>
+                            </div>
+                            <?php if ($report['uncheckedSteps'] !== []) : ?>
+                                <div class="col-12">
+                                    <section class="card" aria-labelledby="report-unchecked-title">
+                                        <div class="card-header">
+                                            <h2 class="card-title" id="report-unchecked-title">Не удалось проверить</h2>
+                                        </div>
+                                        <ul class="list-group list-group-flush">
+                                            <?php foreach ($report['uncheckedSteps'] as $step) : ?>
+                                                <li class="list-group-item">
+                                                    <div class="row align-items-center g-2">
+                                                        <div class="col">
+                                                            <div class="fw-medium"><?= e($step['title']) ?></div>
+                                                            <?php if ($step['message'] !== null) : ?>
+                                                                <div class="text-secondary small text-break"><?= e($step['message']) ?></div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <div class="col-auto">
+                                                            <span class="badge <?= e($step['badgeClass']) ?>"><?= e($step['statusLabel']) ?></span>
+                                                        </div>
+                                                    </div>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    </section>
+                                </div>
+                            <?php endif; ?>
                         </div>
-                    </section>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
