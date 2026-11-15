@@ -85,7 +85,7 @@ final class DiagnosticRunnerTest extends TestCase
         $context = $this->context();
 
         $this->assertSame(
-            ['id' => 7, 'url' => 'https://sudar.su/', 'host' => 'sudar.su', 'problem_text' => null],
+            ['id' => 7, 'url' => 'https://sudar.su/', 'host' => 'sudar.su', 'product_url' => null, 'problem_text' => null],
             $context['diagnostic']
         );
         $this->assertSame([], $context['facts']);
@@ -263,5 +263,23 @@ final class DiagnosticRunnerTest extends TestCase
             $this->assertIsCallable($step['handler']);
             $this->assertNotSame('', $step['title']);
         }
+    }
+
+    public function testCrawlRunsAfterStackAndBeforeResources(): void
+    {
+        $this->assertSame(['availability', 'stack', 'crawl', 'resources'], array_column(getDiagnosticSteps(), 'code'));
+    }
+
+    public function testContextCarriesProductUrl(): void
+    {
+        $this->assertNull($this->context()['diagnostic']['product_url']);
+
+        $context = buildStepContext([
+            'id'          => '8',
+            'url'         => 'https://sudar.su/',
+            'host'        => 'sudar.su',
+            'product_url' => 'https://sudar.su/catalog/item/',
+        ]);
+        $this->assertSame('https://sudar.su/catalog/item/', $context['diagnostic']['product_url']);
     }
 }

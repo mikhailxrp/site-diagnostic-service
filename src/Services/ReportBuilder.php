@@ -88,6 +88,26 @@ const REPORT_EVIDENCE_SOURCE_LABELS = [
     'probe'  => 'Служебный файл',
 ];
 
+/** Типы проверенных страниц в порядке вывода */
+const REPORT_PAGE_TYPE_LABELS = [
+    'home'     => 'Главная',
+    'category' => 'Категория',
+    'product'  => 'Товар',
+    'cart'     => 'Корзина',
+    'checkout' => 'Оформление заказа',
+];
+
+const REPORT_FOUND_BY_LABELS = [
+    'start'          => 'адрес из формы',
+    'cms_pattern'    => 'по шаблону CMS',
+    'link_heuristic' => 'по ссылкам',
+    'manual'         => 'указана вручную',
+];
+
+const REPORT_PAGE_NOT_FOUND_LABEL  = 'не найдена';
+const REPORT_PAGE_NOT_FOUND_REASON = 'страница не найдена';
+const REPORT_PAGE_NO_RESPONSE      = 'нет ответа';
+
 /** Варианты адреса из шага `availability` (ключи — AVAILABILITY_VARIANT_*) */
 const REPORT_VARIANT_LABELS = [
     'http'      => 'http://',
@@ -116,19 +136,21 @@ const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNES
  * @param list<array<string, mixed>> $findings   из getFindingsByDiagnostic()
  * @param list<array<string, mixed>> $stackItems из getStackItemsByDiagnostic()
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
- * @return array{partial: bool, productUrl: ?string, summary: ?array, findingCount: int, findingGroups: list<array>,
- *               stackGroups: list<array>, uncheckedSteps: list<array>}
+ * @return array{partial: bool, productUrl: ?string, summary: ?array, pages: list<array>, findingCount: int,
+ *               findingGroups: list<array>, stackGroups: list<array>, uncheckedSteps: list<array>}
  */
 function buildReport(array $diagnostic, array $findings, array $stackItems, array $pages): array
 {
     $partial = in_array((string) $diagnostic['status'], REPORT_PARTIAL_STATUSES, true);
+    $summary = decodeReportSummary($diagnostic['summary_json'] ?? null);
 
     return [
         'partial'        => $partial,
         'productUrl'     => isset($diagnostic['product_url']) && $diagnostic['product_url'] !== ''
             ? (string) $diagnostic['product_url']
             : null,
-        'summary'        => buildReportSummary(decodeReportSummary($diagnostic['summary_json'] ?? null)),
+        'summary'        => buildReportSummary($summary),
+        'pages'          => buildReportPages($pages, $summary['pages'] ?? null),
         'findingCount'   => count($findings),
         'findingGroups'  => buildReportFindingGroups($findings, buildPageUrlMap($pages)),
         'stackGroups'    => buildReportStackGroups($stackItems),
@@ -341,6 +363,67 @@ function buildReportRedirects(array $redirects): array
     }
 
     return $result;
+}
+
+/**
+ * Проверенные страницы по типам в фиксированном порядке. Не найденная показывается с причиной, только если
+ * шаг поиска страниц отработал (`summary_json.pages` есть): у старых диагностик — только найденные.
+ *
+ * @param list<array<string, mixed>> $pages      строки `checked_pages`
+ * @param mixed                      $crawlFacts `summary_json.pages`: `missing` — тип → причина
+ * @return list<array{type: string, label: string, found: bool, url: ?string, status: string, badgeClass: string,
+ *                    foundBy: ?string, responseMs: ?int, reason: ?string}>
+ */
+function buildReportPages(array $pages, mixed $crawlFacts): array
+{
+    $byType = [];
+    foreach ($pages as $page) {
+        if (isset($page['page_type'])) {
+            $byType[(string) $page['page_type']] ??= $page;
+        }
+    }
+
+    $crawled = is_array($crawlFacts);
+    $missing = $crawled && is_array($crawlFacts['missing'] ?? null) ? $crawlFacts['missing'] : [];
+
+    $rows = [];
+    foreach (REPORT_PAGE_TYPE_LABELS as $type => $label) {
+        $page = $byType[$type] ?? null;
+        if ($page !== null) {
+            $status = isset($page['http_code']) ? (int) $page['http_code'] : null;
+            $foundBy = (string) $page['found_by'];
+            $rows[] = [
+                'type'       => $type,
+                'label'      => $label,
+                'found'      => true,
+                'url'        => (string) $page['url'],
+                'status'     => $status !== null ? (string) $status : REPORT_PAGE_NO_RESPONSE,
+                'badgeClass' => $status !== null ? httpStatusBadge($status) : REPORT_BADGE_BAD,
+                'foundBy'    => REPORT_FOUND_BY_LABELS[$foundBy] ?? $foundBy,
+                'responseMs' => isset($page['response_ms']) ? (int) $page['response_ms'] : null,
+                'reason'     => null,
+            ];
+            continue;
+        }
+
+        if (!$crawled || $type === 'home') {
+            continue;
+        }
+
+        $rows[] = [
+            'type'       => $type,
+            'label'      => $label,
+            'found'      => false,
+            'url'        => null,
+            'status'     => REPORT_PAGE_NOT_FOUND_LABEL,
+            'badgeClass' => REPORT_BADGE_WARNING,
+            'foundBy'    => null,
+            'responseMs' => null,
+            'reason'     => is_string($missing[$type] ?? null) ? $missing[$type] : REPORT_PAGE_NOT_FOUND_REASON,
+        ];
+    }
+
+    return $rows;
 }
 
 /**

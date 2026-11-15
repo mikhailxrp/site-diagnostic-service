@@ -191,6 +191,44 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                 </section>
                             </div>
                             <div class="col-12">
+                                <section class="card" aria-labelledby="report-pages-title">
+                                    <div class="card-header">
+                                        <h2 class="card-title" id="report-pages-title">Проверенные страницы</h2>
+                                    </div>
+                                    <?php if ($report['pages'] === []) : ?>
+                                        <div class="card-body">
+                                            <p class="text-secondary mb-0">Нет данных: страницы сайта не проверены.</p>
+                                        </div>
+                                    <?php else : ?>
+                                        <ul class="list-group list-group-flush">
+                                            <?php foreach ($report['pages'] as $page) : ?>
+                                                <li class="list-group-item">
+                                                    <div class="row align-items-center g-2">
+                                                        <div class="col">
+                                                            <div class="fw-medium"><?= e($page['label']) ?></div>
+                                                            <?php if ($page['found']) : ?>
+                                                                <div class="small text-break"><?= e($page['url']) ?></div>
+                                                                <div class="text-secondary small">
+                                                                    <?= e($page['foundBy']) ?>
+                                                                    <?php if ($page['responseMs'] !== null) : ?>
+                                                                        · <?= e($page['responseMs']) ?> мс
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            <?php else : ?>
+                                                                <div class="text-secondary small text-break"><?= e($page['reason']) ?></div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <div class="col-auto">
+                                                            <span class="badge <?= e($page['badgeClass']) ?>"><?= e($page['status']) ?></span>
+                                                        </div>
+                                                    </div>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    <?php endif; ?>
+                                </section>
+                            </div>
+                            <div class="col-12">
                                 <section class="card" aria-labelledby="report-findings-title">
                                     <div class="card-header">
                                         <h2 class="card-title" id="report-findings-title">Находки</h2>

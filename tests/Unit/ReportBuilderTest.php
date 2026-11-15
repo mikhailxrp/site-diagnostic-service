@@ -151,6 +151,46 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame([], buildReport($diagnostic, [], [], [])['uncheckedSteps']);
     }
 
+    public function testPagesAreListedInOrderWithMissingReasons(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['pages' => ['missing' => [
+            'cart'     => 'типовые адреса не подошли (проверено: 6), ссылок на корзину нет',
+            'checkout' => 'ответ 403 — возможна защита от ботов',
+        ]]]);
+        $pages = [
+            ['id' => 2, 'url' => 'https://shop.ru/catalog/item/', 'page_type' => 'product', 'found_by' => 'manual',
+                'http_code' => 404, 'response_ms' => 80],
+            ['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start',
+                'http_code' => 200, 'response_ms' => 120],
+            ['id' => 3, 'url' => 'https://shop.ru/catalog/', 'page_type' => 'category', 'found_by' => 'cms_pattern',
+                'http_code' => 200, 'response_ms' => 90],
+        ];
+
+        $rows = buildReport($diagnostic, [], [], $pages)['pages'];
+
+        $this->assertSame(['home', 'category', 'product', 'cart', 'checkout'], array_column($rows, 'type'));
+        $this->assertSame([true, true, true, false, false], array_column($rows, 'found'));
+        $this->assertSame('указана вручную', $rows[2]['foundBy']);
+        $this->assertSame('404', $rows[2]['status']);
+        $this->assertSame(REPORT_BADGE_BAD, $rows[2]['badgeClass']);
+        $this->assertSame('по шаблону CMS', $rows[1]['foundBy']);
+        $this->assertSame(REPORT_PAGE_NOT_FOUND_LABEL, $rows[3]['status']);
+        $this->assertStringContainsString('ссылок на корзину нет', (string) $rows[3]['reason']);
+        $this->assertStringContainsString('защита от ботов', (string) $rows[4]['reason']);
+    }
+
+    public function testOldDiagnosticWithoutCrawlShowsOnlyFoundPages(): void
+    {
+        $pages = [['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start',
+            'http_code' => 200, 'response_ms' => 120]];
+
+        $rows = buildReport($this->diagnostic(), [], [], $pages)['pages'];
+
+        $this->assertSame(['home'], array_column($rows, 'type'));
+        $this->assertSame([], buildReport($this->diagnostic(), [], [], [])['pages']);
+    }
+
     public function testProductUrlIsShownOnlyWhenSet(): void
     {
         $diagnostic = $this->diagnostic();

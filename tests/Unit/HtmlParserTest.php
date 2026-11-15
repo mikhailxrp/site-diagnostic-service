@@ -176,4 +176,27 @@ final class HtmlParserTest extends TestCase
         $this->assertIsArray($parsed['scripts']);
         $this->assertSame('https://shop.test/', $parsed['base_url']);
     }
+
+    public function testAnchorsHaveAbsoluteUrlTextAndClassWithoutDuplicates(): void
+    {
+        $html = "<a href=\"/catalog/\" class=\"menu-link\">  Каталог\n\t товаров </a>"
+            . '<a href="/catalog/#top">Каталог (дубль)</a>'
+            . '<a href="product/1" title="Футболка"><img src="/i.jpg" alt=""></a>'
+            . '<a href="mailto:a@shop.test">Почта</a><a href="tel:+7000">Телефон</a>'
+            . '<a href="javascript:void(0)">Купить</a><a href="#reviews">Отзывы</a>';
+
+        $anchors = parseHtml($html, 'https://shop.test/catalog/')['anchors'];
+
+        $this->assertSame([
+            ['url' => 'https://shop.test/catalog/', 'text' => 'Каталог товаров', 'class' => 'menu-link'],
+            ['url' => 'https://shop.test/catalog/product/1', 'text' => 'Футболка', 'class' => ''],
+        ], $anchors);
+    }
+
+    public function testAnchorTextIsLimited(): void
+    {
+        $anchors = parseHtml('<a href="/x">' . str_repeat('я', 500) . '</a>', 'https://shop.test/')['anchors'];
+
+        $this->assertSame(HTML_ANCHOR_TEXT_MAX_LENGTH, mb_strlen($anchors[0]['text']));
+    }
 }

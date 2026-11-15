@@ -13,6 +13,8 @@ require_once ROOT_PATH . '/src/Services/HttpClient.php';
 /** Префикс, по которому libxml понимает, что строка в UTF-8 (иначе кириллица ломается) */
 const HTML_UTF8_HINT = '<?xml encoding="UTF-8">';
 
+const HTML_ANCHOR_TEXT_MAX_LENGTH = 200; // текст ссылки нужен для признаков («корзина», «каталог»), не целиком
+
 /**
  * @return array{base_url: string, meta: list<array{name: string, content: string}>, scripts: list<string>,
  *               styles: list<string>, links: list<array{rel: string, url: string}>, images: list<string>,
@@ -103,6 +105,25 @@ function parseHtml(string $html, string $baseUrl): array
         }
     }
 
+    // Ссылки: первая встреченная пара «адрес + текст»; mailto:, tel:, javascript: и #якоря отбрасывает resolve
+    $anchorUrls = [];
+    foreach ($document->getElementsByTagName('a') as $anchor) {
+        $url = $resolve($anchor->getAttribute('href'));
+        if ($url === null || isset($anchorUrls[$url])) {
+            continue;
+        }
+        $anchorUrls[$url] = true;
+        $text = trim((string) preg_replace('/\s+/u', ' ', $anchor->textContent));
+        if ($text === '') {
+            $text = trim($anchor->getAttribute('title') ?: $anchor->getAttribute('aria-label'));
+        }
+        $result['anchors'][] = [
+            'url'   => $url,
+            'text'  => mb_substr($text, 0, HTML_ANCHOR_TEXT_MAX_LENGTH),
+            'class' => trim($anchor->getAttribute('class')),
+        ];
+    }
+
     foreach ($document->getElementsByTagName('iframe') as $iframe) {
         $url = $resolve($iframe->getAttribute('src'));
         if ($url !== null) {
@@ -149,6 +170,7 @@ function emptyParsedHtml(string $baseUrl): array
         'links'          => [],
         'images'         => [],
         'iframes'        => [],
+        'anchors'        => [],
         'inline_scripts' => [],
         'inline_styles'  => [],
         'comments'       => [],

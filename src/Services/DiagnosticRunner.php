@@ -19,6 +19,7 @@ require_once ROOT_PATH . '/src/Services/Checks/StackCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/ResourceCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/PhpErrorCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/MixedContentCheck.php';
+require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
 const STEP_MESSAGE_MAX_LENGTH = 1000; // как diagnostic_steps.message VARCHAR(1000)
@@ -42,8 +43,9 @@ function getDiagnosticSteps(): array
 {
     return [
         ['code' => 'availability', 'title' => 'Доступность сайта', 'handler' => 'runAvailabilityStep'],
-        ['code' => 'stack',        'title' => 'Определение стека', 'handler' => 'runStackStep'],
-        ['code' => 'resources',    'title' => 'Битые ресурсы',     'handler' => 'runResourcesStep'],
+        ['code' => 'stack',        'title' => 'Определение стека',       'handler' => 'runStackStep'],
+        ['code' => 'crawl',        'title' => 'Поиск страниц магазина', 'handler' => 'runCrawlStep'],
+        ['code' => 'resources',    'title' => 'Битые ресурсы',           'handler' => 'runResourcesStep'],
     ];
 }
 
@@ -93,6 +95,47 @@ function runStackStep(array $context): array
     foreach ($result['facts']['items'] ?? [] as $item) {
         insertStackItem($diagnosticId, $item);
     }
+
+    return $result;
+}
+
+/**
+ * Шаг `crawl` с настоящей сетью и БД: найденные страницы — в `checked_pages` (их `page_id` — в факты и находки),
+ * причины не найденных — в `summary_json.pages`. HTML страниц остаётся в фактах для следующих шагов.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runCrawlStep(array $context): array
+{
+    $diagnosticId = (int) $context['diagnostic']['id'];
+
+    $result = crawlShopPages(
+        $context,
+        static fn (string $url): array => httpRequest($url),
+        null,
+        static fn (int $requests) => touchDiagnosticHeartbeat($diagnosticId)
+    );
+    if ($result['status'] !== STEP_STATUS_DONE) {
+        return $result;
+    }
+
+    foreach ($result['facts']['pages'] as $type => $page) {
+        $pageId = insertCheckedPage($diagnosticId, [
+            'url'         => $page['final_url'],
+            'page_type'   => $type,
+            'found_by'    => $page['found_by'],
+            'http_code'   => $page['status'],
+            'response_ms' => $page['time_ms'],
+        ]);
+        $result['facts']['pages'][$type]['page_id'] = $pageId;
+        $result['findings'] = assignPageIdToFindings($result['findings'], $pageId, [$page['url'], $page['final_url']]);
+    }
+
+    updateDiagnosticSummary($diagnosticId, ['pages' => [
+        'platforms' => $result['facts']['platforms'],
+        'missing'   => (object) $result['facts']['missing'],
+    ]]);
 
     return $result;
 }
@@ -148,7 +191,8 @@ function addPageErrorFindings(array $result, array $home): array
  * Начальный контекст шагов: сама диагностика и пустые факты.
  *
  * @param array<string, mixed> $diagnostic строка `diagnostics`
- * @return array{diagnostic: array{id: int, url: string, host: string, problem_text: ?string}, facts: array}
+ * @return array{diagnostic: array{id: int, url: string, host: string, product_url: ?string, problem_text: ?string},
+ *               facts: array}
  */
 function buildStepContext(array $diagnostic): array
 {
@@ -157,6 +201,9 @@ function buildStepContext(array $diagnostic): array
             'id'           => (int) $diagnostic['id'],
             'url'          => (string) $diagnostic['url'],
             'host'         => (string) $diagnostic['host'],
+            'product_url'  => isset($diagnostic['product_url']) && $diagnostic['product_url'] !== ''
+                ? (string) $diagnostic['product_url']
+                : null,
             'problem_text' => isset($diagnostic['problem_text']) ? (string) $diagnostic['problem_text'] : null,
         ],
         'facts' => [],
