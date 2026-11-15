@@ -9,10 +9,13 @@ declare(strict_types=1);
 
 return [
     'GET' => [
-        '/'         => ['HomeController', 'index'],
-        '/settings' => ['SettingsController', 'index'],
+        '/'                        => ['HomeController', 'index'],
+        '/settings'                => ['SettingsController', 'index'],
+        '/diagnostics/{id}'        => ['DiagnosticController', 'show'],
+        '/diagnostics/{id}/status' => ['DiagnosticController', 'status'],
     ],
     'POST' => [
-        '/settings' => ['SettingsController', 'save'],
+        '/settings'          => ['SettingsController', 'save'],
+        '/diagnostics/start' => ['DiagnosticController', 'start'], // временно, до формы фазы 1
     ],
 ];

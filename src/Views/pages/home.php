@@ -18,7 +18,14 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
     <div class="container-xl">
         <section class="card">
             <div class="card-body">
-                <p class="text-secondary mb-0">Форма запуска диагностики появится в Фазе 1.</p>
+                <p class="text-secondary">Форма запуска диагностики появится в Фазе 1.</p>
+                <form method="post" action="/diagnostics/start">
+                    <?= csrfField() ?>
+                    <button type="submit" class="btn btn-primary btn-lg">
+                        <i class="ti ti-player-play icon" aria-hidden="true"></i>
+                        Тестовый запуск (заглушка)
+                    </button>
+                </form>
             </div>
         </section>
     </div>

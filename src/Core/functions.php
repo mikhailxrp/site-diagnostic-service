@@ -186,8 +186,9 @@ function verifyCsrfToken(mixed $token): bool
 function requireCsrf(): void
 {
     if (!verifyCsrfToken(input('_csrf'))) {
-        http_response_code(419);
-        exit('419 Неверный CSRF-токен. Обновите страницу и попробуйте снова.');
+        // 403, а не 419: нестандартный 419 Apache (OpenServer) подменяет на 500
+        http_response_code(403);
+        exit('403 Неверный CSRF-токен. Обновите страницу и попробуйте снова.');
     }
 }
 

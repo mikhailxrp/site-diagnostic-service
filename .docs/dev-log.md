@@ -13,6 +13,29 @@
 ---
 
 **Дата:** 15.11.2026
+**Что сделано:** Phase 0, таск 6 «Экран прогресса диагностики» ✅. **Фаза 0 завершена.**
+- Маршруты: `GET /diagnostics/{id}`, `GET /diagnostics/{id}/status` (JSON), временный `POST /diagnostics/start`.
+- `DiagnosticStatusService.php`: `parseDiagnosticId()` (`^[1-9][0-9]{0,9}$`), `buildDiagnosticStatus()` / `buildStepStatus()` — подписи и бейджи Tabler в одном месте, JS берёт их из JSON; пока воркер не создал шаги — плановые шаги со статусом «Ожидает».
+- `DiagnosticController.php`: `show` / `status` сначала вызывают `refreshStaleDiagnostic()`; неверный или несуществующий id → 404 (страница `empty` / JSON `not_found`), ошибка БД → лог + 500. `start` (временный, до формы фазы 1): `https://example.com` → `launchWorker()`; сбой запуска → диагностика `failed` с причиной, лог, флеш.
+- `pages/diagnostic.php` (вместо `diagnostics/show.php` из плана): состояния «в очереди», «идёт», «готово» (карточка под отчёт), «ошибка», «не найдена»; нативный `<progress class="progress">` — без inline-стилей.
+- `diagnostic-progress.js`: опрос раз в 2 с через `setTimeout` после ответа, `textContent`, остановка на `done` / `failed` / 404, предупреждение при обрыве связи.
+- `home.php`: временная кнопка «Тестовый запуск (заглушка)».
+- Вне scope по просьбе владельца: `requireCsrf()` отвечает **403** вместо 419 (Apache в OpenServer подменял 419 на 500); `.phpunit.result.cache` в `.gitignore`.
+- Проверено в браузере: прогресс 25 → 100 без перезагрузки, после `done` запросов нет, консоль чистая; воркер доходит до `done` после закрытия вкладки; «в очереди», «прервана» (heartbeat 11 мин), неверный `PHP_CLI_PATH`, 404 на странице и в JSON, CSRF → 403; 360 / 768 / 1280 px. `composer test` — 84 теста OK (+ `DiagnosticStatusServiceTest`). Тестовые записи, лог и скриншоты удалены.
+**Что следующее:** Фаза 1 «Экспресс-диагностика» — перепроверить план `phase-1.md` промптом `.docs/prompts/phase-init.md` с учётом сделанного, затем создать TASK.md для таска 1. Временную кнопку `start` и заглушку `example.com` убрать вместе с формой фазы 1.
+
+**Дата:** 15.11.2026
+**Что сделано:** Phase 0, таск 5 «Фоновое выполнение диагностики» ✅.
+- `database/install.php`: таблицы `diagnostics` и `diagnostic_steps` по `database.md` (FK, индексы), установка идемпотентна.
+- `DiagnosticModel.php` (функции): создание, атомарный захват `queued → running` (`claimDiagnostic()`), шаги, прогресс + heartbeat, завершение, `failStaleDiagnostic()` — транзакция; время везде через `NOW()` в SQL.
+- `DiagnosticRunner.php`: 4 шага-заглушки по 2 с; `executeSteps()` без БД — try/catch на шаг, `done / skipped / failed`, обрезка сообщения до 1000; диагностика с упавшим шагом → `done`; `refreshStaleDiagnostic()` (10 мин) — для экрана таска 6.
+- `JobLauncher.php`: `start "" /B "<php>" "<worker>" <id> > NUL 2>&1`; пути с `"`, `%`, переводом строки отклоняются; неверный `PHP_CLI_PATH` → исключение.
+- `bin/worker.php`: только CLI, строгая проверка id (код 2), не в очереди → код 1 без изменений в БД, ошибка воркера → лог + `failed`.
+- Проверено CLI-скриптами: запуск за 0,012 с, прогресс до 100, повтор для `running`/`done`, неверные id, падение шага (скрипт, повторяющий поток `runDiagnostic()`), зависание `running` и `queued`; `composer test` — 62 теста OK (+ `DiagnosticRunnerTest`, `JobLauncherTest`). Тестовые записи и тестовый `app.log` удалены.
+- Перенесено в таск 6: проверка запуска из браузера и работы воркера после закрытия вкладки (добавлено в DoD таска 6 в `phase-0.md`).
+**Что следующее:** Phase 0, таск 6 «Экран прогресса диагностики» — создать TASK.md через `.docs/prompts/task-init.md`. Мелочь на потом: `.phpunit.result.cache` в `.gitignore`.
+
+**Дата:** 15.11.2026
 **Что сделано:** Phase 0, таск 4 «Страница настроек» ✅.
 - `/settings`: модели RouterAI для трёх ИИ-задач (`model_problem`, `model_visual`, `model_summary`) сохраняются в `settings`; ключи `.env` (`ROUTERAI_API_KEY`, `PAGESPEED_API_KEY`, `WPSCAN_API_KEY`) показаны маской `sk-…a1b2` или «не задан», `ROUTERAI_BASE_URL` — целиком; полей ввода ключей нет.
 - `SettingsModel.php` (функции): `getAllSettings()`, `getSetting()`, `saveSettings()` — `INSERT … ON DUPLICATE KEY UPDATE` одной транзакцией с откатом.
