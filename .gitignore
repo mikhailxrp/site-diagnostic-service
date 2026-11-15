@@ -9,3 +9,7 @@ storage/temp/*
 Thumbs.db
 /vendor/
 /.phpunit.cache/
+storage/screenshots/*
+!storage/screenshots/.gitkeep
+storage/pdf/*
+!storage/pdf/.gitkeep

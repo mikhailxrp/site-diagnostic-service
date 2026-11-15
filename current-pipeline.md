@@ -1,4 +1,4 @@
-# Pipeline — < Название проекта >
+# Pipeline — Site Diagnostics
 
 ## Текущий статус
 См. `.docs/phases/_status.md`

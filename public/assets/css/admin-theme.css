@@ -1,0 +1,20 @@
+/*
+ * Подмена стилей Tabler под проект.
+ * Подключается ПОСЛЕ tabler.min.css и tabler-icons.min.css.
+ * Цвета не меняем: решение владельца (15.11.2026) — стандартные компоненты Tabler.
+ */
+
+:root {
+    /* Минимальная зона нажатия (44 px) — правило .claude/rules/design.md */
+    --app-touch-target: 2.75rem;
+}
+
+/* В Tabler кнопка-бургер 32 px, пункты меню 40 px (.navbar .navbar-nav .nav-link) */
+.navbar-toggler,
+.navbar .navbar-nav .nav-link {
+    min-height: var(--app-touch-target);
+}
+
+.navbar-toggler {
+    min-width: var(--app-touch-target);
+}

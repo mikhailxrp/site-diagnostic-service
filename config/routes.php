@@ -10,12 +10,9 @@ declare(strict_types=1);
 return [
     'GET' => [
         '/'         => ['HomeController', 'index'],
-        '/login'    => ['AuthController', 'showLogin'],
-        '/register' => ['AuthController', 'showRegister'],
+        '/settings' => ['SettingsController', 'index'],
     ],
     'POST' => [
-        '/login'    => ['AuthController', 'login'],
-        '/register' => ['AuthController', 'register'],
-        '/logout'   => ['AuthController', 'logout'],
+        '/settings' => ['SettingsController', 'save'],
     ],
 ];
