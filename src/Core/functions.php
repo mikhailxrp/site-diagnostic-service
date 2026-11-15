@@ -222,16 +222,24 @@ function tooManyAttempts(string $action, int $maxAttempts, int $decaySeconds = 6
     return (int) $data['count'] >= $maxAttempts;
 }
 
-function hitRateLimit(string $action): void
+/**
+ * Засчитывает попытку. Если окно `$decaySeconds` с первой попытки истекло, счёт начинается заново —
+ * иначе после первого окна `tooManyAttempts()` больше никогда не срабатывал бы.
+ */
+function hitRateLimit(string $action, int $decaySeconds = 60): void
 {
     $path = rateLimitStoragePath($action);
-    $data = ['count' => 1, 'first_at' => time()];
+    $now  = time();
+    $data = ['count' => 1, 'first_at' => $now];
 
     if (is_file($path)) {
         $existing = json_decode((string) file_get_contents($path), true);
-        if (is_array($existing) && isset($existing['count'], $existing['first_at'])) {
-            $data = $existing;
-            $data['count'] = (int) $data['count'] + 1;
+        if (
+            is_array($existing)
+            && isset($existing['count'], $existing['first_at'])
+            && $now - (int) $existing['first_at'] <= $decaySeconds
+        ) {
+            $data = ['count' => (int) $existing['count'] + 1, 'first_at' => (int) $existing['first_at']];
         }
     }
 

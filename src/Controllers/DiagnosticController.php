@@ -10,15 +10,23 @@ require_once ROOT_PATH . '/src/Models/DiagnosticModel.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticRunner.php';
 require_once ROOT_PATH . '/src/Services/JobLauncher.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
+require_once ROOT_PATH . '/src/Services/UrlValidator.php';
 
 /**
- * Экран прогресса диагностики, JSON для опроса и временный запуск диагностики-заглушки.
+ * Запуск диагностики из формы, экран прогресса и JSON для опроса.
  */
 final class DiagnosticController
 {
-    /** Временный запуск (до формы фазы 1): шаги — заглушки, сайт не запрашивается */
-    private const TEST_URL  = 'https://example.com';
-    private const TEST_HOST = 'example.com';
+    /** Ключ сессии: ошибки полей и ввод после неудачной отправки (на один показ, читает HomeController) */
+    public const FORM_STATE_KEY = 'diagnostic_form';
+
+    /**
+     * Не больше 5 запусков за 60 секунд: каждый запуск — отдельный процесс воркера
+     * (позже — Chrome и платные запросы к ИИ). Успешный запуск счётчик не сбрасывает.
+     */
+    private const RATE_LIMIT_ACTION         = 'diagnostic_start';
+    private const RATE_LIMIT_MAX_ATTEMPTS   = 5;
+    private const RATE_LIMIT_WINDOW_SECONDS = 60;
 
     /** Как diagnostics.error_message VARCHAR(1000) */
     private const ERROR_MESSAGE_MAX_LENGTH = 1000;
@@ -74,18 +82,36 @@ final class DiagnosticController
     }
 
     /**
-     * Временная кнопка «Тестовый запуск» на главной — уберётся с формой фазы 1.
+     * Форма «Новая диагностика» (главная): проверка ссылки → запись → запуск воркера → экран прогресса.
      */
-    public function start(): void
+    public function store(): void
     {
         requireCsrf();
 
+        if (tooManyAttempts(self::RATE_LIMIT_ACTION, self::RATE_LIMIT_MAX_ATTEMPTS, self::RATE_LIMIT_WINDOW_SECONDS)) {
+            logWarning('Превышен лимит запусков диагностики', [
+                'max_attempts'   => self::RATE_LIMIT_MAX_ATTEMPTS,
+                'window_seconds' => self::RATE_LIMIT_WINDOW_SECONDS,
+            ]);
+            $this->backToForm(
+                readDiagnosticFormValues($_POST),
+                [],
+                'Слишком много запусков подряд. Подождите минуту и попробуйте снова.'
+            );
+        }
+        hitRateLimit(self::RATE_LIMIT_ACTION, self::RATE_LIMIT_WINDOW_SECONDS);
+
+        $form = validateDiagnosticInput($_POST, 'resolveHostIps');
+        if ($form['errors'] !== []) {
+            $this->backToForm($form['values'], $form['errors'], 'Диагностика не запущена: исправьте отмеченные поля.');
+        }
+
         try {
-            $diagnosticId = createDiagnostic(self::TEST_URL, self::TEST_HOST, null);
+            $previousId   = findLatestDiagnosticIdByHost($form['host']);
+            $diagnosticId = createDiagnostic($form['url'], $form['host'], $form['problemText'], $previousId);
         } catch (Throwable $e) {
             logException($e);
-            setFlash('error', 'Не удалось создать диагностику. Подробности в журнале.');
-            redirect('/');
+            $this->backToForm($form['values'], [], 'Не удалось создать диагностику. Подробности в журнале.');
         }
 
         try {
@@ -110,6 +136,20 @@ final class DiagnosticController
         $diagnostic = getDiagnosticWithSteps($diagnosticId);
 
         return $diagnostic !== null ? buildDiagnosticStatus($diagnostic, getDiagnosticSteps()) : null;
+    }
+
+    /**
+     * Возврат на форму с введёнными значениями, ошибками полей и флешем. Не возвращается (redirect).
+     *
+     * @param array<string, string> $values
+     * @param array<string, string> $errors
+     */
+    private function backToForm(array $values, array $errors, string $flash): never
+    {
+        $_SESSION[self::FORM_STATE_KEY] = ['values' => $values, 'errors' => $errors];
+        setFlash('error', $flash);
+        redirect('/');
+        exit;
     }
 
     private function markLaunchFailed(int $diagnosticId, string $reason): void

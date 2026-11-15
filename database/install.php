@@ -80,6 +80,52 @@ $tables = [
                 REFERENCES diagnostics (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         SQL,
+
+    // Фаза 1: проверенные страницы сайта
+    'checked_pages' => <<<SQL
+        CREATE TABLE IF NOT EXISTS checked_pages (
+            id            INT NOT NULL AUTO_INCREMENT,
+            diagnostic_id INT NOT NULL,
+            url           VARCHAR(2048) NOT NULL,
+            page_type     ENUM('home','category','product','cart','checkout','other') NOT NULL,
+            found_by      ENUM('start','cms_pattern','link_heuristic','manual') NOT NULL,
+            http_code     SMALLINT UNSIGNED NULL,
+            response_ms   INT UNSIGNED NULL,
+            blocked       TINYINT(1) NOT NULL DEFAULT 0,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            CONSTRAINT fk_checked_pages_diagnostic FOREIGN KEY (diagnostic_id)
+                REFERENCES diagnostics (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        SQL,
+
+    // Фаза 1: находки от проверок и (с фазы 4) от ИИ.
+    // ai_result_id пока без FK: таблица ai_results появится в фазе 4, FK добавится там же (ALTER TABLE)
+    'findings' => <<<SQL
+        CREATE TABLE IF NOT EXISTS findings (
+            id            INT NOT NULL AUTO_INCREMENT,
+            diagnostic_id INT NOT NULL,
+            page_id       INT NULL,
+            source        ENUM('check','ai') NOT NULL,
+            category      VARCHAR(50) NOT NULL,
+            severity      ENUM('critical','high','medium','low','info') NOT NULL,
+            title         VARCHAR(255) NOT NULL,
+            details       TEXT NULL,
+            client_text   TEXT NULL,
+            location      VARCHAR(2048) NULL,
+            evidence      JSON NULL,
+            fingerprint   CHAR(40) NOT NULL,
+            ai_result_id  INT NULL,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            INDEX idx_findings_diagnostic_severity (diagnostic_id, severity),
+            INDEX idx_findings_fingerprint (fingerprint),
+            CONSTRAINT fk_findings_diagnostic FOREIGN KEY (diagnostic_id)
+                REFERENCES diagnostics (id) ON DELETE CASCADE,
+            CONSTRAINT fk_findings_page FOREIGN KEY (page_id)
+                REFERENCES checked_pages (id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        SQL,
 ];
 
 // ─── Установка ─────────────────────────────────────────────────────────────────

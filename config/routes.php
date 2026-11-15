@@ -15,7 +15,7 @@ return [
         '/diagnostics/{id}/status' => ['DiagnosticController', 'status'],
     ],
     'POST' => [
-        '/settings'          => ['SettingsController', 'save'],
-        '/diagnostics/start' => ['DiagnosticController', 'start'], // временно, до формы фазы 1
+        '/settings'    => ['SettingsController', 'save'],
+        '/diagnostics' => ['DiagnosticController', 'store'],
     ],
 ];

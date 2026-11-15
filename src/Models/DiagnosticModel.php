@@ -12,15 +12,33 @@ require_once ROOT_PATH . '/src/Core/Database.php';
 const DIAGNOSTIC_STALE_MESSAGE = 'Диагностика прервана: воркер перестал отвечать.';
 const STEP_STALE_MESSAGE       = 'Шаг прерван: воркер перестал отвечать.';
 
-function createDiagnostic(string $url, string $host, ?string $problemText): int
+function createDiagnostic(string $url, string $host, ?string $problemText, ?int $previousId): int
 {
     $pdo = getPdo();
     $statement = $pdo->prepare(
-        'INSERT INTO diagnostics (url, host, problem_text) VALUES (:url, :host, :problem_text)'
+        'INSERT INTO diagnostics (url, host, problem_text, previous_id)
+         VALUES (:url, :host, :problem_text, :previous_id)'
     );
-    $statement->execute(['url' => $url, 'host' => $host, 'problem_text' => $problemText]);
+    $statement->execute([
+        'url'          => $url,
+        'host'         => $host,
+        'problem_text' => $problemText,
+        'previous_id'  => $previousId,
+    ]);
 
     return (int) $pdo->lastInsertId();
+}
+
+/**
+ * Последняя диагностика этого хоста (без `www.`) — для `previous_id`. null — хост проверяется впервые.
+ */
+function findLatestDiagnosticIdByHost(string $host): ?int
+{
+    $statement = getPdo()->prepare('SELECT id FROM diagnostics WHERE host = :host ORDER BY id DESC LIMIT 1');
+    $statement->execute(['host' => $host]);
+    $id = $statement->fetchColumn();
+
+    return $id === false ? null : (int) $id;
 }
 
 /**
