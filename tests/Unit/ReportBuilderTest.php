@@ -151,6 +151,18 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame([], buildReport($diagnostic, [], [], [])['uncheckedSteps']);
     }
 
+    public function testProductUrlIsShownOnlyWhenSet(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $this->assertNull(buildReport($diagnostic, [], [], [])['productUrl']);
+
+        $diagnostic['product_url'] = 'https://shop.ru/product/1';
+        $this->assertSame('https://shop.ru/product/1', buildReport($diagnostic, [], [], [])['productUrl']);
+
+        $diagnostic['product_url'] = '';
+        $this->assertNull(buildReport($diagnostic, [], [], [])['productUrl']);
+    }
+
     public function testBrokenOrMissingSummaryGivesNoData(): void
     {
         foreach ([null, '', '{broken', '[]', '{"ssl": null}'] as $summaryJson) {

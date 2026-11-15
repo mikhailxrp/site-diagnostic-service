@@ -7,7 +7,7 @@ namespace App\Controllers;
 require_once ROOT_PATH . '/src/Services/UrlValidator.php';
 
 /**
- * Главная = «Новая диагностика»: форма «ссылка + описание проблемы» (отправка — DiagnosticController::store).
+ * Главная = «Новая диагностика»: форма «ссылка + адрес товара + описание проблемы» (отправка — DiagnosticController::store).
  */
 final class HomeController
 {
@@ -22,6 +22,7 @@ final class HomeController
             'values'           => readDiagnosticFormValues($formState['values'] ?? []),
             'errors'           => $formState['errors'] ?? [],
             'urlMaxLength'     => SITE_URL_MAX_LENGTH,
+            'productMaxLength' => SITE_URL_MAX_LENGTH,
             'problemMaxLength' => PROBLEM_TEXT_MAX_LENGTH,
         ]);
     }

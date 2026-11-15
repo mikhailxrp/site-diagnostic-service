@@ -107,6 +107,12 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                     <div class="card-header">
                                         <h2 class="card-title" id="report-summary-title">Сводка</h2>
                                     </div>
+                                    <?php if ($report['productUrl'] !== null) : ?>
+                                        <div class="card-body border-bottom">
+                                            <div class="datagrid-title">Адрес товара (указан вручную)</div>
+                                            <div class="text-break"><?= e($report['productUrl']) ?></div>
+                                        </div>
+                                    <?php endif; ?>
                                     <?php if ($report['summary'] === null) : ?>
                                         <div class="card-body">
                                             <p class="text-secondary mb-0">Нет данных: доступность сайта не проверена.</p>

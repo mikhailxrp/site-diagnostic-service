@@ -3,12 +3,13 @@
 declare(strict_types=1);
 
 /**
- * Новая диагностика: форма «ссылка + описание проблемы».
- * Ожидает: $title, $activeMenu, $values (url, problem_text), $errors (поле → текст ошибки),
- * $urlMaxLength, $problemMaxLength.
+ * Новая диагностика: форма «ссылка + адрес товара + описание проблемы».
+ * Ожидает: $title, $activeMenu, $values (url, product_url, problem_text), $errors (поле → текст ошибки),
+ * $urlMaxLength, $productMaxLength, $problemMaxLength.
  */
 
 $urlError     = $errors['url'] ?? null;
+$productError = $errors['product_url'] ?? null;
 $problemError = $errors['problem_text'] ?? null;
 
 render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
@@ -51,6 +52,29 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                 <?php endif; ?>
                                 <small class="form-hint" id="diagnostic-url-hint">
                                     Можно без https:// — например, shop.ru или магазин.рф. Локальные адреса не проверяются.
+                                </small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="diagnostic-product">Адрес товара (необязательно)</label>
+                                <input type="text"
+                                       inputmode="url"
+                                       class="form-control form-control-lg<?= $productError !== null ? ' is-invalid' : '' ?>"
+                                       id="diagnostic-product"
+                                       name="product_url"
+                                       value="<?= e($values['product_url']) ?>"
+                                       maxlength="<?= e($productMaxLength) ?>"
+                                       placeholder="shop.ru/catalog/product-123"
+                                       autocomplete="off"
+                                       autocapitalize="off"
+                                       spellcheck="false"
+                                       aria-describedby="diagnostic-product-hint<?= $productError !== null ? ' diagnostic-product-error' : '' ?>"
+                                       <?= $productError !== null ? 'aria-invalid="true"' : '' ?>>
+                                <?php if ($productError !== null) : ?>
+                                    <div class="invalid-feedback" id="diagnostic-product-error"><?= e($productError) ?></div>
+                                <?php endif; ?>
+                                <small class="form-hint" id="diagnostic-product-hint">
+                                    Страница любого товара этого же сайта. Если указать, сервис проверит этот товар
+                                    вместо автоматического поиска.
                                 </small>
                             </div>
                             <div class="mb-3">

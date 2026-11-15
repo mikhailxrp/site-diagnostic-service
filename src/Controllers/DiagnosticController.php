@@ -119,7 +119,13 @@ final class DiagnosticController
 
         try {
             $previousId   = findLatestDiagnosticIdByHost($form['host']);
-            $diagnosticId = createDiagnostic($form['url'], $form['host'], $form['problemText'], $previousId);
+            $diagnosticId = createDiagnostic(
+                $form['url'],
+                $form['host'],
+                $form['problemText'],
+                $previousId,
+                $form['productUrl']
+            );
         } catch (Throwable $e) {
             logException($e);
             $this->backToForm($form['values'], [], 'Не удалось создать диагностику. Подробности в журнале.');

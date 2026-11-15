@@ -185,7 +185,7 @@
 - `src/Models/FindingModel.php`, `StackModel.php`, `PageModel.php` — функции чтения по диагностике
 - `public/assets/js/diagnostic-progress.js` — по `done` перезагружает страницу, чтобы показать отчёт
 - `tests/Unit/ReportBuilderTest.php`
-- Решения при реализации: раскрытие источников и сырых данных — нативный `<details>` (JS Tabler не подключён);
+- Решения при реализации: раскрытие источников и сырых данных — нативный `<details>` (работает и без JS);
   `data-result-done` → `data-result-report`; отчёт для `cancelled` не делался (статус нигде не выставляется)
 
 **Definition of Done:**

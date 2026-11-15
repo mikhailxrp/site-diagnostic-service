@@ -12,16 +12,25 @@ require_once ROOT_PATH . '/src/Core/Database.php';
 const DIAGNOSTIC_STALE_MESSAGE = 'Диагностика прервана: воркер перестал отвечать.';
 const STEP_STALE_MESSAGE       = 'Шаг прерван: воркер перестал отвечать.';
 
-function createDiagnostic(string $url, string $host, ?string $problemText, ?int $previousId): int
-{
+/**
+ * @param string|null $productUrl адрес товара из формы (null — искать товар автоматически)
+ */
+function createDiagnostic(
+    string $url,
+    string $host,
+    ?string $problemText,
+    ?int $previousId,
+    ?string $productUrl = null
+): int {
     $pdo = getPdo();
     $statement = $pdo->prepare(
-        'INSERT INTO diagnostics (url, host, problem_text, previous_id)
-         VALUES (:url, :host, :problem_text, :previous_id)'
+        'INSERT INTO diagnostics (url, host, product_url, problem_text, previous_id)
+         VALUES (:url, :host, :product_url, :problem_text, :previous_id)'
     );
     $statement->execute([
         'url'          => $url,
         'host'         => $host,
+        'product_url'  => $productUrl,
         'problem_text' => $problemText,
         'previous_id'  => $previousId,
     ]);
@@ -230,4 +239,94 @@ function failStaleDiagnostic(int $id, int $staleSeconds): bool
     }
 
     return $isStale;
+}
+
+/**
+ * Условие поиска по части адреса: `host` или `url` содержат строку (`%`, `_` и `\` ищутся буквально).
+ * Пустой запрос — все диагностики.
+ *
+ * @return array{0: string, 1: array<string, string>} SQL-условие и параметры
+ */
+function buildDiagnosticSearchCondition(string $query): array
+{
+    if ($query === '') {
+        return ['1 = 1', []];
+    }
+
+    $pattern = '%' . addcslashes($query, '\%_') . '%';
+
+    return ['(d.host LIKE :host_pattern OR d.url LIKE :url_pattern)', [
+        'host_pattern' => $pattern,
+        'url_pattern'  => $pattern,
+    ]];
+}
+
+/**
+ * Страница истории: новые сверху, со счётчиками находок (критичные, высокие, всего).
+ *
+ * @return list<array<string, mixed>>
+ */
+function searchDiagnostics(string $query, int $limit, int $offset): array
+{
+    [$condition, $params] = buildDiagnosticSearchCondition($query);
+
+    $statement = getPdo()->prepare(
+        "SELECT d.id, d.url, d.host, d.status, d.created_at,
+                (SELECT COUNT(*) FROM findings f
+                  WHERE f.diagnostic_id = d.id AND f.severity = 'critical') AS critical_count,
+                (SELECT COUNT(*) FROM findings f
+                  WHERE f.diagnostic_id = d.id AND f.severity = 'high') AS high_count,
+                (SELECT COUNT(*) FROM findings f WHERE f.diagnostic_id = d.id) AS finding_count
+         FROM diagnostics d
+         WHERE {$condition}
+         ORDER BY d.id DESC
+         LIMIT :limit OFFSET :offset"
+    );
+    foreach ($params as $name => $value) {
+        $statement->bindValue($name, $value);
+    }
+    $statement->bindValue('limit', $limit, PDO::PARAM_INT);
+    $statement->bindValue('offset', $offset, PDO::PARAM_INT);
+    $statement->execute();
+
+    return $statement->fetchAll();
+}
+
+function countDiagnostics(string $query): int
+{
+    [$condition, $params] = buildDiagnosticSearchCondition($query);
+
+    $statement = getPdo()->prepare("SELECT COUNT(*) FROM diagnostics d WHERE {$condition}");
+    $statement->execute($params);
+
+    return (int) $statement->fetchColumn();
+}
+
+/**
+ * null — диагностики нет.
+ */
+function getDiagnosticStatus(int $id): ?string
+{
+    $statement = getPdo()->prepare('SELECT status FROM diagnostics WHERE id = :id');
+    $statement->execute(['id' => $id]);
+    $status = $statement->fetchColumn();
+
+    return $status === false ? null : (string) $status;
+}
+
+/**
+ * Удаляет диагностику, если она не выполняется (`queued` / `running` — воркер ещё пишет в её записи;
+ * тот же список — HISTORY_UNDELETABLE_STATUSES). Шаги, страницы, стек и находки удаляются каскадом (FK),
+ * у следующих диагностик хоста `previous_id` становится NULL. Один DELETE — атомарно.
+ *
+ * @return bool false — диагностики нет или она выполняется
+ */
+function deleteDiagnostic(int $id): bool
+{
+    $statement = getPdo()->prepare(
+        "DELETE FROM diagnostics WHERE id = :id AND status NOT IN ('queued', 'running')"
+    );
+    $statement->execute(['id' => $id]);
+
+    return $statement->rowCount() > 0;
 }

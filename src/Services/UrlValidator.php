@@ -17,7 +17,10 @@ const LOCAL_HOST_SUFFIX   = '.localhost';
 const WWW_PREFIX          = 'www.';
 
 /** Поля формы: имя поля → значение по умолчанию */
-const DIAGNOSTIC_FORM_FIELDS = ['url' => '', 'problem_text' => ''];
+const DIAGNOSTIC_FORM_FIELDS = ['url' => '', 'product_url' => '', 'problem_text' => ''];
+
+/** Путь главной: такой «адрес товара» не принимается */
+const HOME_PAGE_PATH = '/';
 
 /**
  * Приводит ссылку к виду `https://host[:port]/path[?query]`: схема по умолчанию https,
@@ -199,7 +202,7 @@ function resolveHostIps(string $host): array
  * Значения полей формы как строки (для повторного показа формы).
  *
  * @param array<string, mixed> $input
- * @return array{url: string, problem_text: string}
+ * @return array{url: string, product_url: string, problem_text: string}
  */
 function readDiagnosticFormValues(array $input): array
 {
@@ -213,17 +216,47 @@ function readDiagnosticFormValues(array $input): array
 }
 
 /**
+ * Необязательный адрес товара: формат как у ссылки на сайт, тот же сайт (хост без `www.`), не главная.
+ * Если хост сайта неизвестен (ссылка на сайт с ошибкой) — проверяется только формат.
+ *
+ * @return array{url: ?string, error: ?string} url — null, если поле пустое или с ошибкой
+ */
+function validateProductUrl(string $raw, ?string $siteHost): array
+{
+    if (trim($raw) === '') {
+        return ['url' => null, 'error' => null];
+    }
+
+    $normalized = normalizeSiteUrl($raw);
+    if (isset($normalized['error'])) {
+        return ['url' => null, 'error' => $normalized['error']];
+    }
+
+    if ($siteHost !== null && extractBaseHost($normalized['host']) !== $siteHost) {
+        return ['url' => null, 'error' => 'Адрес товара должен быть с того же сайта: ' . $siteHost . '.'];
+    }
+
+    $parts = parse_url($normalized['url']);
+    if (($parts['path'] ?? HOME_PAGE_PATH) === HOME_PAGE_PATH && !isset($parts['query'])) {
+        return ['url' => null, 'error' => 'Укажите страницу товара, а не главную.'];
+    }
+
+    return ['url' => $normalized['url'], 'error' => null];
+}
+
+/**
  * Проверка формы новой диагностики.
  *
  * @param array<string, mixed> $input
  * @param callable(string $host): list<string> $resolver
  * @return array{
- *     values: array{url: string, problem_text: string},
+ *     values: array{url: string, product_url: string, problem_text: string},
  *     errors: array<string, string>,
  *     url: ?string,
  *     host: ?string,
+ *     productUrl: ?string,
  *     problemText: ?string
- * } host — без `www.`; problemText — null, если описание пустое
+ * } host — без `www.`; productUrl и problemText — null, если поле пустое
  */
 function validateDiagnosticInput(array $input, callable $resolver): array
 {
@@ -245,6 +278,11 @@ function validateDiagnosticInput(array $input, callable $resolver): array
         }
     }
 
+    $product = validateProductUrl($values['product_url'], $host);
+    if ($product['error'] !== null) {
+        $errors['product_url'] = $product['error'];
+    }
+
     $problemText = $values['problem_text'] === '' ? null : $values['problem_text'];
     if ($problemText !== null) {
         if (!mb_check_encoding($problemText, 'UTF-8')) {
@@ -255,8 +293,22 @@ function validateDiagnosticInput(array $input, callable $resolver): array
     }
 
     if ($errors !== []) {
-        return ['values' => $values, 'errors' => $errors, 'url' => null, 'host' => null, 'problemText' => null];
+        return [
+            'values'      => $values,
+            'errors'      => $errors,
+            'url'         => null,
+            'host'        => null,
+            'productUrl'  => null,
+            'problemText' => null,
+        ];
     }
 
-    return ['values' => $values, 'errors' => [], 'url' => $url, 'host' => $host, 'problemText' => $problemText];
+    return [
+        'values'      => $values,
+        'errors'      => [],
+        'url'         => $url,
+        'host'        => $host,
+        'productUrl'  => $product['url'],
+        'problemText' => $problemText,
+    ];
 }

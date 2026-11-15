@@ -116,7 +116,7 @@ const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNES
  * @param list<array<string, mixed>> $findings   из getFindingsByDiagnostic()
  * @param list<array<string, mixed>> $stackItems из getStackItemsByDiagnostic()
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
- * @return array{partial: bool, summary: ?array, findingCount: int, findingGroups: list<array>,
+ * @return array{partial: bool, productUrl: ?string, summary: ?array, findingCount: int, findingGroups: list<array>,
  *               stackGroups: list<array>, uncheckedSteps: list<array>}
  */
 function buildReport(array $diagnostic, array $findings, array $stackItems, array $pages): array
@@ -125,6 +125,9 @@ function buildReport(array $diagnostic, array $findings, array $stackItems, arra
 
     return [
         'partial'        => $partial,
+        'productUrl'     => isset($diagnostic['product_url']) && $diagnostic['product_url'] !== ''
+            ? (string) $diagnostic['product_url']
+            : null,
         'summary'        => buildReportSummary(decodeReportSummary($diagnostic['summary_json'] ?? null)),
         'findingCount'   => count($findings),
         'findingGroups'  => buildReportFindingGroups($findings, buildPageUrlMap($pages)),

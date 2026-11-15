@@ -176,10 +176,16 @@ final class UrlValidatorTest extends TestCase
 
     public function testValidateDiagnosticInputKeepsValuesOnError(): void
     {
-        $result = validateDiagnosticInput(['url' => 'localhost', 'problem_text' => 'текст'], $this->resolver([]));
+        $result = validateDiagnosticInput(
+            ['url' => 'localhost', 'product_url' => 'localhost/item', 'problem_text' => 'текст'],
+            $this->resolver([])
+        );
 
         $this->assertArrayHasKey('url', $result['errors']);
-        $this->assertSame(['url' => 'localhost', 'problem_text' => 'текст'], $result['values']);
+        $this->assertSame(
+            ['url' => 'localhost', 'product_url' => 'localhost/item', 'problem_text' => 'текст'],
+            $result['values']
+        );
         $this->assertNull($result['url']);
         $this->assertNull($result['host']);
     }
@@ -191,6 +197,88 @@ final class UrlValidatorTest extends TestCase
         $this->assertArrayHasKey('url', $result['errors']);
         $this->assertArrayHasKey('problem_text', $result['errors']);
         $this->assertSame('', $result['values']['url']);
+    }
+
+    public function testEmptyProductUrlIsNull(): void
+    {
+        $result = validateDiagnosticInput(['url' => 'shop.ru', 'product_url' => '   '], $this->resolver([self::PUBLIC_IP]));
+
+        $this->assertSame([], $result['errors']);
+        $this->assertNull($result['productUrl']);
+        $this->assertSame('', $result['values']['product_url']);
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function validProductUrlProvider(): array
+    {
+        return [
+            'без схемы'       => ['shop.ru/product/123', 'https://shop.ru/product/123'],
+            'с www'           => ['https://www.shop.ru/catalog/item/', 'https://www.shop.ru/catalog/item/'],
+            'с фрагментом'    => ['shop.ru/p/1#reviews', 'https://shop.ru/p/1'],
+            'товар по query'  => ['shop.ru/?product_id=42', 'https://shop.ru/?product_id=42'],
+            'http'            => ['http://shop.ru/item', 'http://shop.ru/item'],
+        ];
+    }
+
+    #[DataProvider('validProductUrlProvider')]
+    public function testValidProductUrlIsNormalized(string $raw, string $expected): void
+    {
+        $result = validateDiagnosticInput(['url' => 'shop.ru', 'product_url' => $raw], $this->resolver([self::PUBLIC_IP]));
+
+        $this->assertSame([], $result['errors']);
+        $this->assertSame($expected, $result['productUrl']);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function invalidProductUrlProvider(): array
+    {
+        return [
+            'чужой домен'  => ['other.ru/product/1'],
+            'поддомен'     => ['catalog.shop.ru/product/1'],
+            'похожий'      => ['shop.ru.evil.com/product/1'],
+            'ftp'          => ['ftp://shop.ru/product/1'],
+            'мусор'        => ['http://'],
+            'главная'      => ['https://shop.ru/'],
+            'главная www'  => ['www.shop.ru'],
+            'с паролем'    => ['https://user:pass@shop.ru/p/1'],
+        ];
+    }
+
+    #[DataProvider('invalidProductUrlProvider')]
+    public function testInvalidProductUrlIsRejectedAtItsField(string $raw): void
+    {
+        $result = validateDiagnosticInput(
+            ['url' => 'shop.ru', 'product_url' => $raw, 'problem_text' => 'текст'],
+            $this->resolver([self::PUBLIC_IP])
+        );
+
+        $this->assertSame(['product_url'], array_keys($result['errors']));
+        $this->assertNull($result['url']);
+        $this->assertNull($result['productUrl']);
+        $this->assertSame($raw, $result['values']['product_url']);
+        $this->assertSame('текст', $result['values']['problem_text']);
+    }
+
+    public function testForeignDomainErrorNamesTheSite(): void
+    {
+        $this->assertSame(
+            'Адрес товара должен быть с того же сайта: shop.ru.',
+            validateProductUrl('other.ru/p/1', 'shop.ru')['error']
+        );
+    }
+
+    public function testSiteUrlErrorDoesNotBlameValidProductUrl(): void
+    {
+        $result = validateDiagnosticInput(
+            ['url' => 'localhost', 'product_url' => 'shop.ru/product/1'],
+            $this->resolver([])
+        );
+
+        $this->assertSame(['url'], array_keys($result['errors']));
     }
 
     /**
