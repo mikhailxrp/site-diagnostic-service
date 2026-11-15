@@ -385,7 +385,7 @@ function detectLibraries(array $items, array $urls, array $libraries): array
     foreach (array_values(array_unique($urls)) as $url) {
         $path = (string) parse_url($url, PHP_URL_PATH);
 
-        foreach ($libraries as $library) {
+        foreach ($libraries as $libraryKey => $library) {
             $match = null;
             foreach ($library['files'] as $pattern) {
                 if (preg_match($pattern, $path, $found) === 1) {
@@ -397,7 +397,7 @@ function detectLibraries(array $items, array $urls, array $libraries): array
                 continue;
             }
 
-            $base = ['category' => 'js_library', 'name' => $library['name']];
+            $base = ['key' => (string) $libraryKey, 'category' => 'js_library', 'name' => $library['name']];
             $weight = isset($items[stackItemId('js_library', $library['name'])]) ? STACK_WEIGHT_WEAK : STACK_WEIGHT_FIRST;
             $version = ($match[1] ?? '') !== '' ? $match[1] : extractUrlVersion($url);
             $items = addStackSignal($items, $base, 'url:' . $url, $weight, 'url', $url, $version);

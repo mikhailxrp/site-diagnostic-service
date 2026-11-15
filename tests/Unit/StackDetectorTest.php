@@ -216,6 +216,17 @@ final class StackDetectorTest extends TestCase
         $this->assertSame('11.0.5', $this->find($plain, 'js_library', 'Swiper')['version'], 'версия из пути CDN');
     }
 
+    /**
+     * Ключ библиотеки из data/signatures.php — по нему шаг `outdated` находит источник версии.
+     */
+    public function testLibraryItemsHaveSignatureKey(): void
+    {
+        $wordpress = $this->detect('wordpress');
+
+        $this->assertSame('jquery', $this->find($wordpress, 'js_library', 'jQuery')['key']);
+        $this->assertSame('jquery-migrate', $this->find($wordpress, 'js_library', 'jQuery Migrate')['key']);
+    }
+
     public function testJqueryUiAndMigrateAreNotJquery(): void
     {
         $html = '<script src="/js/jquery-ui.min.js"></script><script src="/js/jquery-migrate-3.4.1.min.js"></script>';

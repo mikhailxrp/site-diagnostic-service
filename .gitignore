@@ -14,3 +14,5 @@ storage/screenshots/*
 !storage/screenshots/.gitkeep
 storage/pdf/*
 !storage/pdf/.gitkeep
+storage/databases/*
+!storage/databases/.gitkeep

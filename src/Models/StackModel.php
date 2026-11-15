@@ -36,6 +36,15 @@ function insertStackItem(int $diagnosticId, array $item): int
 }
 
 /**
+ * Актуальная версия элемента стека из справочника (шаг `outdated`).
+ */
+function updateStackItemLatestVersion(int $stackItemId, string $latestVersion): void
+{
+    $statement = getPdo()->prepare('UPDATE stack_items SET latest_version = :latest_version WHERE id = :id');
+    $statement->execute(['latest_version' => $latestVersion, 'id' => $stackItemId]);
+}
+
+/**
  * Элементы стека диагностики в порядке записи. `evidence` — массив (пустой, если JSON не читается).
  *
  * @return list<array<string, mixed>>

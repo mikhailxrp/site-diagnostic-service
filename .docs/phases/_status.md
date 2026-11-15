@@ -40,6 +40,5 @@
 
 | Вопрос | Нужно к |
 |---|---|
-| Токен Wordfence (`WORDFENCE_API_KEY`): бесплатная регистрация на wordfence.com → Integrations | Фаза 2, таск 7 |
 | Ключ PageSpeed Insights | Фаза 3, таск 4 |
 | Модели RouterAI по умолчанию (какие понимают картинки) | Фаза 4, таск 1 |

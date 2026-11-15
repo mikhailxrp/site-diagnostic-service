@@ -1,0 +1,91 @@
+{
+    "updated_at": "2026-11-16T00:40:55+03:00",
+    "items": {
+        "wordpress": {
+            "latest": "7.1.4",
+            "source": "wordpress",
+            "updated_at": "2026-11-16T00:40:39+03:00"
+        },
+        "joomla": {
+            "latest": "6.2.0",
+            "source": "github",
+            "updated_at": "2026-11-16T00:40:41+03:00"
+        },
+        "magento": {
+            "latest": "2.4.9",
+            "source": "github",
+            "updated_at": "2026-11-16T00:40:41+03:00"
+        },
+        "prestashop": {
+            "latest": "9.2.1",
+            "source": "packagist",
+            "updated_at": "2026-11-16T00:40:42+03:00"
+        },
+        "opencart": {
+            "latest": "4.1.0.4",
+            "source": "packagist",
+            "updated_at": "2026-11-16T00:40:42+03:00"
+        },
+        "php": {
+            "latest": "8.5.12",
+            "branches": {
+                "8.2": "8.2.35",
+                "8.3": "8.3.36",
+                "8.4": "8.4.27",
+                "8.5": "8.5.12"
+            },
+            "source": "php",
+            "updated_at": "2026-11-16T00:40:43+03:00"
+        },
+        "jquery": {
+            "latest": "4.0.0",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:43+03:00"
+        },
+        "jquery-migrate": {
+            "latest": "4.0.2",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:45+03:00"
+        },
+        "jquery-ui": {
+            "latest": "1.14.2",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:45+03:00"
+        },
+        "bootstrap": {
+            "latest": "5.3.9",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:46+03:00"
+        },
+        "vue": {
+            "latest": "3.5.45",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:47+03:00"
+        },
+        "react": {
+            "latest": "19.3.1",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:49+03:00"
+        },
+        "swiper": {
+            "latest": "14.4.0",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:50+03:00"
+        },
+        "slick": {
+            "latest": "2.0.0",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:50+03:00"
+        },
+        "fancybox": {
+            "latest": "6.1.15",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:53+03:00"
+        },
+        "lodash": {
+            "latest": "4.18.1",
+            "source": "npm",
+            "updated_at": "2026-11-16T00:40:55+03:00"
+        }
+    }
+}

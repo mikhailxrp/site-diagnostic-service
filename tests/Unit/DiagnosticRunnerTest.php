@@ -265,10 +265,10 @@ final class DiagnosticRunnerTest extends TestCase
         }
     }
 
-    public function testCrawlRunsAfterStackAndBeforeResources(): void
+    public function testStepsOrder(): void
     {
         $this->assertSame(
-            ['availability', 'stack', 'crawl', 'resources', 'seo'],
+            ['availability', 'stack', 'outdated', 'crawl', 'resources', 'seo'],
             array_column(getDiagnosticSteps(), 'code')
         );
     }

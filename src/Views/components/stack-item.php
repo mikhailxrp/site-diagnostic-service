@@ -12,8 +12,14 @@ declare(strict_types=1);
         <?php if ($stackItem['version'] !== null) : ?>
             <span class="text-secondary"><?= e($stackItem['version']) ?></span>
         <?php endif; ?>
+        <?php if ($stackItem['statusLabel'] !== null) : ?>
+            <span class="badge <?= e($stackItem['statusBadge']) ?>"><?= e($stackItem['statusLabel']) ?></span>
+        <?php endif; ?>
         <span class="badge <?= e($stackItem['badgeClass']) ?> ms-auto"><?= e($stackItem['confidenceLabel']) ?></span>
     </div>
+    <?php if ($stackItem['latestVersion'] !== null && $stackItem['version'] !== null) : ?>
+        <div class="text-secondary small">актуальная: <?= e($stackItem['latestVersion']) ?></div>
+    <?php endif; ?>
     <?php if ($stackItem['evidence'] !== []) : ?>
         <details>
             <summary class="py-3 cursor-pointer text-secondary small">Источники признака (<?= e(count($stackItem['evidence'])) ?>)</summary>

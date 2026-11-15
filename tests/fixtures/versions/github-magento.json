@@ -1,0 +1,8 @@
+[
+  {"tag_name": "2.4.10-alpha1", "draft": false, "prerelease": true},
+  {"tag_name": "2.4.7-p8", "draft": false, "prerelease": false},
+  {"tag_name": "2.4.9", "draft": false, "prerelease": false},
+  {"tag_name": "2.4.11-beta1", "draft": false, "prerelease": false},
+  {"tag_name": "v2.5.0", "draft": true, "prerelease": false},
+  {"tag_name": "2.4.8-p3", "draft": false, "prerelease": false}
+]

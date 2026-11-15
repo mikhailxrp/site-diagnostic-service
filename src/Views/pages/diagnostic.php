@@ -188,6 +188,16 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                             </ul>
                                         <?php endforeach; ?>
                                     <?php endif; ?>
+                                    <?php if ($report['databases'] !== []) : ?>
+                                        <div class="card-footer">
+                                            <?php foreach ($report['databases'] as $database) : ?>
+                                                <div class="small text-secondary"><?= e($database['title']) ?> — от <?= e($database['date']) ?></div>
+                                            <?php endforeach; ?>
+                                            <?php if ($report['databasesStale']) : ?>
+                                                <div class="alert alert-warning mt-2 mb-0" role="alert"><?= e($report['databasesWarning']) ?></div>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </section>
                             </div>
                             <div class="col-12">

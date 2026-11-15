@@ -143,6 +143,17 @@ const REPORT_SSL_WARNING_DAYS = 14;
 const REPORT_ROBOTS_AGENT_LABELS = ['*' => 'всех роботов', 'yandex' => 'Яндекса', 'googlebot' => 'Google'];
 const REPORT_SEO_BLOCKED_VALUE   = 'не удалось проверить (защита от ботов)';
 
+/** Версии стека (шаг `outdated`): бейдж по находке `outdated` с `evidence.stack_item_id` */
+const REPORT_OUTDATED_LABEL       = 'устарела';
+const REPORT_UNSUPPORTED_LABEL    = 'ветка не поддерживается';
+const REPORT_OUTDATED_BADGE       = 'bg-yellow-lt';
+const REPORT_UNSUPPORTED_BADGE    = 'bg-red-lt';
+const REPORT_DATABASE_STALE_DAYS  = 14; // база старше на момент диагностики — Планировщик не обновлял её
+const REPORT_DATABASE_NO_DATE     = 'дата неизвестна';
+const REPORT_DATABASE_STALE_WARNING = 'База не обновлялась больше %d дней на момент диагностики — проверьте задачу '
+    . 'Планировщика «Site Diagnostics - обновление баз».';
+const REPORT_SECONDS_PER_DAY      = 86400;
+
 const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     | JSON_INVALID_UTF8_SUBSTITUTE;
 
@@ -153,13 +164,15 @@ const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNES
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
  * @return array{partial: bool, productUrl: ?string, summary: ?array, pages: list<array>, findingCount: int,
  *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
- *               stackGroups: list<array>, uncheckedSteps: list<array>}
+ *               stackGroups: list<array>, databases: list<array>, databasesStale: bool, databasesWarning: string,
+ *               uncheckedSteps: list<array>}
  */
 function buildReport(array $diagnostic, array $findings, array $stackItems, array $pages): array
 {
     $partial = in_array((string) $diagnostic['status'], REPORT_PARTIAL_STATUSES, true);
     $summary = decodeReportSummary($diagnostic['summary_json'] ?? null);
     $blocked = buildBlockedPageReasons($pages, $summary['blocked'] ?? null);
+    $databases = buildReportDatabases($summary['databases'] ?? null, $diagnostic['created_at'] ?? null);
     $pageUrls = buildPageUrlMap($pages);
 
     return [
@@ -173,7 +186,10 @@ function buildReport(array $diagnostic, array $findings, array $stackItems, arra
         'findingGroups'     => buildReportFindingGroups($findings, $pageUrls),
         'findingPageGroups' => buildReportFindingsByPage($findings, $pages, $blocked),
         'blockedBadge'      => ['label' => REPORT_PAGE_BLOCKED_LABEL, 'badgeClass' => REPORT_BADGE_BLOCKED],
-        'stackGroups'       => buildReportStackGroups($stackItems),
+        'stackGroups'       => buildReportStackGroups($stackItems, buildOutdatedStackMap($findings)),
+        'databases'         => $databases,
+        'databasesStale'    => in_array(true, array_column($databases, 'stale'), true),
+        'databasesWarning'  => sprintf(REPORT_DATABASE_STALE_WARNING, REPORT_DATABASE_STALE_DAYS),
         'uncheckedSteps'    => buildReportUncheckedSteps($diagnostic['steps'] ?? [], $partial),
     ];
 }
@@ -758,7 +774,7 @@ function buildReportFindingsByPage(array $findings, array $pages, array $blocked
  * @param list<array<string, mixed>> $stackItems
  * @return list<array{category: string, label: string, items: list<array>}>
  */
-function buildReportStackGroups(array $stackItems): array
+function buildReportStackGroups(array $stackItems, array $outdated = []): array
 {
     $byCategory = array_fill_keys(array_keys(REPORT_STACK_CATEGORY_LABELS), []);
 
@@ -767,7 +783,7 @@ function buildReportStackGroups(array $stackItems): array
         if (!array_key_exists($category, $byCategory)) {
             $category = 'other';
         }
-        $byCategory[$category][] = buildReportStackItem($item);
+        $byCategory[$category][] = buildReportStackItem($item, $outdated[(int) ($item['id'] ?? 0)] ?? null);
     }
 
     $groups = [];
@@ -782,10 +798,12 @@ function buildReportStackGroups(array $stackItems): array
 
 /**
  * @param array<string, mixed> $item
- * @return array{name: string, version: ?string, confidenceLabel: string, badgeClass: string,
- *               evidence: list<array{source: string, detail: string}>}
+ * @param bool|null            $unsupported находка `outdated` по элементу: true — ветка без поддержки,
+ *                                          false — устарела, null — находки нет
+ * @return array{name: string, version: ?string, latestVersion: ?string, statusLabel: ?string, statusBadge: ?string,
+ *               confidenceLabel: string, badgeClass: string, evidence: list<array{source: string, detail: string}>}
  */
-function buildReportStackItem(array $item): array
+function buildReportStackItem(array $item, ?bool $unsupported = null): array
 {
     $confidence = (string) $item['confidence'];
     $version    = isset($item['version']) && $item['version'] !== '' ? (string) $item['version'] : null;
@@ -806,10 +824,69 @@ function buildReportStackItem(array $item): array
     return [
         'name'            => (string) $item['name'],
         'version'         => $version,
+        'latestVersion'   => isset($item['latest_version']) && $item['latest_version'] !== ''
+            ? (string) $item['latest_version']
+            : null,
+        'statusLabel'     => match ($unsupported) {
+            true    => REPORT_UNSUPPORTED_LABEL,
+            false   => REPORT_OUTDATED_LABEL,
+            default => null,
+        },
+        'statusBadge'     => match ($unsupported) {
+            true    => REPORT_UNSUPPORTED_BADGE,
+            false   => REPORT_OUTDATED_BADGE,
+            default => null,
+        },
         'confidenceLabel' => REPORT_CONFIDENCE_LABELS[$confidence] ?? $confidence,
         'badgeClass'      => REPORT_CONFIDENCE_BADGES[$confidence] ?? REPORT_BADGE_NEUTRAL,
         'evidence'        => $evidence,
     ];
+}
+
+/**
+ * id элемента стека → ветка без поддержки (true) / устарела (false) — по находкам `outdated`.
+ *
+ * @param list<array<string, mixed>> $findings
+ * @return array<int, bool>
+ */
+function buildOutdatedStackMap(array $findings): array
+{
+    $map = [];
+    foreach ($findings as $finding) {
+        $evidence = is_array($finding['evidence'] ?? null) ? $finding['evidence'] : [];
+        if (($finding['category'] ?? null) === 'outdated' && isset($evidence['stack_item_id'])) {
+            $map[(int) $evidence['stack_item_id']] = !empty($evidence['unsupported']);
+        }
+    }
+
+    return $map;
+}
+
+/**
+ * Базы, которыми пользовалась диагностика (`summary_json.databases`: ключ → название, дата): дата для экрана и
+ * признак «старше REPORT_DATABASE_STALE_DAYS на момент диагностики». Нет шага `outdated` → пусто.
+ *
+ * @return list<array{title: string, date: string, stale: bool}>
+ */
+function buildReportDatabases(mixed $databases, mixed $diagnosticCreatedAt): array
+{
+    $at = is_string($diagnosticCreatedAt) ? strtotime($diagnosticCreatedAt) : false;
+    $at = $at !== false ? $at : time();
+
+    $rows = [];
+    foreach (is_array($databases) ? $databases : [] as $database) {
+        if (!is_array($database)) {
+            continue;
+        }
+        $updated = is_string($database['updated_at'] ?? null) ? strtotime($database['updated_at']) : false;
+        $rows[] = [
+            'title' => (string) ($database['title'] ?? ''),
+            'date'  => $updated !== false ? date('d.m.Y', $updated) : REPORT_DATABASE_NO_DATE,
+            'stale' => $updated === false || ($at - $updated) > REPORT_DATABASE_STALE_DAYS * REPORT_SECONDS_PER_DAY,
+        ];
+    }
+
+    return $rows;
 }
 
 /**

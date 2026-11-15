@@ -21,6 +21,7 @@ require_once ROOT_PATH . '/src/Services/Checks/PhpErrorCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/MixedContentCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/BotProtectionCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SeoCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/OutdatedCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
@@ -46,6 +47,7 @@ function getDiagnosticSteps(): array
     return [
         ['code' => 'availability', 'title' => 'Доступность сайта', 'handler' => 'runAvailabilityStep'],
         ['code' => 'stack',        'title' => 'Определение стека',       'handler' => 'runStackStep'],
+        ['code' => 'outdated',     'title' => 'Устаревшие версии',       'handler' => 'runOutdatedStep'],
         ['code' => 'crawl',        'title' => 'Поиск страниц магазина', 'handler' => 'runCrawlStep'],
         ['code' => 'resources',    'title' => 'Битые ресурсы',           'handler' => 'runResourcesStep'],
         ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
@@ -91,7 +93,8 @@ function runAvailabilityStep(array $context): array
 }
 
 /**
- * Шаг `stack` с настоящей сетью и БД: элементы стека — в `stack_items`.
+ * Шаг `stack` с настоящей сетью и БД: элементы стека — в `stack_items`, их id — в факты (`stack_item_id`)
+ * для шага `outdated`.
  *
  * @param array<string, mixed> $context
  * @return array<string, mixed>
@@ -101,9 +104,31 @@ function runStackStep(array $context): array
     $result = runStackCheck($context, static fn (string $url): array => httpRequest($url));
 
     $diagnosticId = (int) $context['diagnostic']['id'];
-    foreach ($result['facts']['items'] ?? [] as $item) {
-        insertStackItem($diagnosticId, $item);
+    foreach ($result['facts']['items'] ?? [] as $index => $item) {
+        $result['facts']['items'][$index]['stack_item_id'] = insertStackItem($diagnosticId, $item);
     }
+
+    return $result;
+}
+
+/**
+ * Шаг `outdated` с настоящей сетью и БД: актуальные версии — в `stack_items.latest_version`, дата справочника —
+ * в `summary_json.databases`. Находки сохраняет `runDiagnostic()`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runOutdatedStep(array $context): array
+{
+    $result = runOutdatedCheck($context, static fn (string $url): array => httpRequest($url));
+    if ($result['status'] !== STEP_STATUS_DONE) {
+        return $result;
+    }
+
+    foreach ($result['facts']['latest'] as $stackItemId => $latestVersion) {
+        updateStackItemLatestVersion((int) $stackItemId, $latestVersion);
+    }
+    updateDiagnosticSummary((int) $context['diagnostic']['id'], ['databases' => $result['facts']['databases']]);
 
     return $result;
 }

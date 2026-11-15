@@ -338,6 +338,56 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame([], buildReportSeoRows(['robots' => 'битое']));
     }
 
+    public function testStackItemShowsLatestVersionAndOutdatedBadge(): void
+    {
+        $stack = [
+            ['id' => 5, 'category' => 'js_library', 'name' => 'jQuery', 'version' => '1.12.4', 'latest_version' => '4.0.0',
+                'confidence' => 'high', 'evidence' => []],
+            ['id' => 6, 'category' => 'js_library', 'name' => 'Swiper', 'version' => '11.0.0', 'latest_version' => '14.4.0',
+                'confidence' => 'high', 'evidence' => []],
+            ['id' => 7, 'category' => 'js_library', 'name' => 'Lodash', 'version' => '4.18.1', 'latest_version' => '4.18.1',
+                'confidence' => 'high', 'evidence' => []],
+            ['id' => 8, 'category' => 'js_library', 'name' => 'Vue.js', 'version' => null, 'latest_version' => null,
+                'confidence' => 'low', 'evidence' => []],
+        ];
+        $findings = [
+            $this->finding('medium', 'jQuery', ['category' => 'outdated', 'evidence' => ['stack_item_id' => 5, 'unsupported' => true]]),
+            $this->finding('low', 'Swiper', ['category' => 'outdated', 'evidence' => ['stack_item_id' => 6, 'unsupported' => false]]),
+        ];
+
+        $items = buildReport($this->diagnostic(), $findings, $stack, [])['stackGroups'][0]['items'];
+
+        $this->assertSame([REPORT_UNSUPPORTED_LABEL, REPORT_OUTDATED_LABEL, null, null], array_column($items, 'statusLabel'));
+        $this->assertSame(['4.0.0', '14.4.0', '4.18.1', null], array_column($items, 'latestVersion'));
+        $this->assertSame(REPORT_UNSUPPORTED_BADGE, $items[0]['statusBadge']);
+    }
+
+    public function testDatabasesDateAndStaleWarning(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['created_at'] = '2026-11-16 12:00:00';
+        $diagnostic['summary_json'] = json_encode(['databases' => [
+            'latest_versions' => ['title' => 'База версий', 'updated_at' => '2026-11-10T10:00:00+03:00'],
+        ]]);
+
+        $report = buildReport($diagnostic, [], [], []);
+        $this->assertSame([['title' => 'База версий', 'date' => '10.11.2026', 'stale' => false]], $report['databases']);
+        $this->assertFalse($report['databasesStale']);
+
+        $diagnostic['summary_json'] = json_encode(['databases' => [
+            'latest_versions' => ['title' => 'База версий', 'updated_at' => '2026-10-20T10:00:00+03:00'],
+            'wordfence'       => ['title' => 'Уязвимости WordPress', 'updated_at' => null],
+        ]]);
+        $report = buildReport($diagnostic, [], [], []);
+        $this->assertSame([true, true], array_column($report['databases'], 'stale'));
+        $this->assertSame(REPORT_DATABASE_NO_DATE, $report['databases'][1]['date']);
+        $this->assertTrue($report['databasesStale']);
+        $this->assertStringContainsString('Планировщика', $report['databasesWarning']);
+
+        // Старая диагностика без шага outdated
+        $this->assertSame([], buildReport($this->diagnostic(), [], [], [])['databases']);
+    }
+
     public function testProductUrlIsShownOnlyWhenSet(): void
     {
         $diagnostic = $this->diagnostic();
