@@ -20,6 +20,7 @@ require_once ROOT_PATH . '/src/Services/Checks/ResourceCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/PhpErrorCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/MixedContentCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/BotProtectionCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/SeoCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
@@ -47,6 +48,7 @@ function getDiagnosticSteps(): array
         ['code' => 'stack',        'title' => 'Определение стека',       'handler' => 'runStackStep'],
         ['code' => 'crawl',        'title' => 'Поиск страниц магазина', 'handler' => 'runCrawlStep'],
         ['code' => 'resources',    'title' => 'Битые ресурсы',           'handler' => 'runResourcesStep'],
+        ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
     ];
 }
 
@@ -174,6 +176,27 @@ function runResourcesStep(array $context): array
     );
 
     return addPageErrorFindings($result, $context);
+}
+
+/**
+ * Шаг `seo` с настоящей сетью и БД: итоги robots.txt и sitemap — в `summary_json.seo`, находки сохраняет
+ * `runDiagnostic()`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runSeoStep(array $context): array
+{
+    $result = runSeoCheck($context, static fn (string $url): array => httpRequest($url));
+
+    if ($result['status'] === STEP_STATUS_DONE) {
+        updateDiagnosticSummary((int) $context['diagnostic']['id'], ['seo' => [
+            'robots'  => $result['facts']['robots'],
+            'sitemap' => $result['facts']['sitemap'],
+        ]]);
+    }
+
+    return $result;
 }
 
 /**

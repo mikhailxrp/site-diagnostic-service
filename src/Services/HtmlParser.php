@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 /**
- * Разбор HTML страницы через `DOMDocument`: мета-теги, скрипты, стили, ссылки, картинки, inline-скрипты,
- * комментарии. Адреса — абсолютные (с учётом `<base href>`), не-http(s) (`data:`, `javascript:`) отбрасываются.
+ * Разбор HTML страницы через `DOMDocument`: заголовок `<title>`, мета-теги, скрипты, стили, ссылки, картинки,
+ * inline-скрипты, комментарии. Адреса — абсолютные (с учётом `<base href>`), не-http(s) (`data:`, `javascript:`) отбрасываются.
  * Битый или пустой HTML → пустые списки, без исключений и предупреждений PHP.
  */
 
@@ -16,7 +16,9 @@ const HTML_UTF8_HINT = '<?xml encoding="UTF-8">';
 const HTML_ANCHOR_TEXT_MAX_LENGTH = 200; // текст ссылки нужен для признаков («корзина», «каталог»), не целиком
 
 /**
- * @return array{base_url: string, meta: list<array{name: string, content: string}>, scripts: list<string>,
+ * `title` — текст первого `<title>` (пробелы схлопнуты), null — тега нет.
+ *
+ * @return array{base_url: string, title: ?string, meta: list<array{name: string, content: string}>, scripts: list<string>,
  *               styles: list<string>, links: list<array{rel: string, url: string}>, images: list<string>,
  *               iframes: list<string>, inline_scripts: list<string>, inline_styles: list<string>,
  *               comments: list<string>}
@@ -37,6 +39,11 @@ function parseHtml(string $html, string $baseUrl): array
     $baseUrl = detectDocumentBaseUrl($document, $baseUrl);
     $result['base_url'] = $baseUrl;
     $resolve = static fn (string $value): ?string => resolveHtmlUrl($baseUrl, $value);
+
+    $title = $document->getElementsByTagName('title')->item(0);
+    if ($title !== null) {
+        $result['title'] = trim((string) preg_replace('/\s+/u', ' ', $title->textContent));
+    }
 
     foreach ($document->getElementsByTagName('meta') as $meta) {
         $name = strtolower(trim($meta->getAttribute('name') ?: $meta->getAttribute('property')));
@@ -164,6 +171,7 @@ function emptyParsedHtml(string $baseUrl): array
 {
     return [
         'base_url'       => $baseUrl,
+        'title'          => null,
         'meta'           => [],
         'scripts'        => [],
         'styles'         => [],

@@ -29,6 +29,17 @@ final class HtmlParserTest extends TestCase
         $this->assertSame(['https://shop.test/catalog/css/a.css'], $parsed['styles']);
     }
 
+    public function testTitleIsFirstTitleTagWithCollapsedSpaces(): void
+    {
+        $html = "<html><head><title>  Купить\n   диван   </title></head>"
+            . '<body><svg><title>Иконка</title></svg></body></html>';
+
+        $this->assertSame('Купить диван', parseHtml($html, 'https://shop.test/')['title']);
+        $this->assertSame('', parseHtml('<html><head><title></title></head></html>', 'https://shop.test/')['title']);
+        $this->assertNull(parseHtml('<html><head></head><body>текст</body></html>', 'https://shop.test/')['title']);
+        $this->assertNull(parseHtml('', 'https://shop.test/')['title']);
+    }
+
     public function testBaseHrefIsUsedForRelativeUrls(): void
     {
         $html = '<html><head><base href="https://parts.test/shop/"><script src="js/a.js"></script></head></html>';

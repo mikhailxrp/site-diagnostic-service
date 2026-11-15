@@ -1,0 +1,11 @@
+# Обычный robots.txt магазина
+User-agent: *
+Disallow: /admin/
+Disallow: /personal/
+Allow: /catalog/
+
+User-agent: Yandex
+Disallow:
+Clean-param: utm_source /
+
+Sitemap: https://shop.test/sitemap-main.xml

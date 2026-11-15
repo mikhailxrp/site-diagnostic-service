@@ -267,7 +267,10 @@ final class DiagnosticRunnerTest extends TestCase
 
     public function testCrawlRunsAfterStackAndBeforeResources(): void
     {
-        $this->assertSame(['availability', 'stack', 'crawl', 'resources'], array_column(getDiagnosticSteps(), 'code'));
+        $this->assertSame(
+            ['availability', 'stack', 'crawl', 'resources', 'seo'],
+            array_column(getDiagnosticSteps(), 'code')
+        );
     }
 
     public function testContextCarriesProductUrl(): void

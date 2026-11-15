@@ -139,6 +139,10 @@ const REPORT_BADGE_NEUTRAL = 'bg-secondary-lt';
 /** Сертификат, который истекает раньше, — предупреждение (как в SslCheck: < 14 дней → `medium`) */
 const REPORT_SSL_WARNING_DAYS = 14;
 
+/** Строки SEO в сводке (`summary_json.seo`, шаг `seo`); робот из SEO_ROBOTS_AGENTS → подпись */
+const REPORT_ROBOTS_AGENT_LABELS = ['*' => 'всех роботов', 'yandex' => 'Яндекса', 'googlebot' => 'Google'];
+const REPORT_SEO_BLOCKED_VALUE   = 'не удалось проверить (защита от ботов)';
+
 const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     | JSON_INVALID_UTF8_SUBSTITUTE;
 
@@ -230,6 +234,7 @@ function buildReportSummary(?array $summary, ?string $homeBlocked = null): ?arra
             'разные сайты'
         ),
         ...buildReportSslRows($summary['ssl'] ?? null),
+        ...buildReportSeoRows($summary['seo'] ?? null),
     ];
 
     $warnings = [];
@@ -292,6 +297,79 @@ function buildReportFlagRow(string $label, mixed $flag, string $yes, string $no)
         false   => ['label' => $label, 'value' => $no, 'badgeClass' => REPORT_BADGE_BAD],
         default => ['label' => $label, 'value' => 'не проверено', 'badgeClass' => REPORT_BADGE_NEUTRAL],
     };
+}
+
+/**
+ * robots.txt, sitemap.xml и число адресов в sitemap. Шага `seo` не было (старая диагностика) → строк нет.
+ *
+ * @param mixed $seo `summary_json.seo`: `robots`, `sitemap` (факты SeoCheck без тел ответов)
+ * @return list<array{label: string, value: string, badgeClass: ?string}>
+ */
+function buildReportSeoRows(mixed $seo): array
+{
+    if (!is_array($seo) || !is_array($seo['robots'] ?? null) || !is_array($seo['sitemap'] ?? null)) {
+        return [];
+    }
+
+    $robots = $seo['robots'];
+    $sitemap = $seo['sitemap'];
+    $robotsCode = isset($robots['status']) ? (string) $robots['status'] : 'нет ответа';
+    $sitemapCode = isset($sitemap['status']) ? (string) $sitemap['status'] : 'нет ответа';
+    $disallow = is_array($robots['disallow_all'] ?? null) ? $robots['disallow_all'] : [];
+
+    $robotsRow = match ($robots['state'] ?? null) {
+        'ok'      => $disallow !== []
+            ? ['закрыт для ' . implode(', ', array_map(
+                static fn (string $agent): string => REPORT_ROBOTS_AGENT_LABELS[$agent] ?? $agent,
+                $disallow
+            )), REPORT_BADGE_BAD]
+            : ["есть ({$robotsCode})", REPORT_BADGE_GOOD],
+        'missing' => ["нет ({$robotsCode})", REPORT_BADGE_WARNING],
+        'blocked' => [REPORT_SEO_BLOCKED_VALUE, REPORT_BADGE_NEUTRAL],
+        default   => ["ошибка ({$robotsCode})", REPORT_BADGE_BAD],
+    };
+
+    $sitemapUrl = (string) ($sitemap['url'] ?? '');
+    $sitemapRow = match ($sitemap['state'] ?? null) {
+        'ok'      => ["{$sitemapUrl} ({$sitemapCode})", null],
+        'empty'   => ["{$sitemapUrl} — пустой", REPORT_BADGE_WARNING],
+        'missing' => ['не найден', REPORT_BADGE_WARNING],
+        'blocked' => [REPORT_SEO_BLOCKED_VALUE, REPORT_BADGE_NEUTRAL],
+        default   => ["{$sitemapUrl} — ошибка ({$sitemapCode})", REPORT_BADGE_BAD],
+    };
+
+    $rows = [
+        ['label' => 'robots.txt', 'value' => $robotsRow[0], 'badgeClass' => $robotsRow[1]],
+        ['label' => 'sitemap.xml', 'value' => $sitemapRow[0], 'badgeClass' => $sitemapRow[1]],
+    ];
+
+    if (in_array($sitemap['state'] ?? null, ['ok', 'empty'], true)) {
+        $rows[] = ['label' => 'Адресов в sitemap', 'value' => buildSitemapCountValue($sitemap), 'badgeClass' => null];
+    }
+
+    return $rows;
+}
+
+/**
+ * «1520», «не меньше 41000 (файл обрезан по размеру)», «индекс из 12 файлов, в первом — 5000 адресов».
+ *
+ * @param array<string, mixed> $sitemap
+ */
+function buildSitemapCountValue(array $sitemap): string
+{
+    $urls = isset($sitemap['urls_count']) ? (int) $sitemap['urls_count'] : null;
+    $truncated = !empty($sitemap['truncated']);
+    $urlsText = match (true) {
+        $urls === null => 'не удалось посчитать',
+        $truncated     => "не меньше {$urls} (файл обрезан по размеру)",
+        default        => (string) $urls,
+    };
+
+    if (empty($sitemap['is_index'])) {
+        return $urlsText;
+    }
+
+    return 'индекс из ' . (int) ($sitemap['sitemaps_count'] ?? 0) . " файлов, в первом — {$urlsText} адресов";
 }
 
 /**

@@ -297,6 +297,47 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame([], buildReport($this->diagnostic(), [], [], [])['findingPageGroups']);
     }
 
+    public function testSeoRowsAreShownOnlyAfterSeoStep(): void
+    {
+        $availability = ['home' => ['url' => self::HOME_URL, 'final_url' => self::HOME_URL, 'status' => 200]];
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['availability' => $availability]);
+
+        $labels = array_column(buildReport($diagnostic, [], [], [])['summary']['rows'], 'label');
+        $this->assertNotContains('robots.txt', $labels);
+
+        $diagnostic['summary_json'] = json_encode(['availability' => $availability, 'seo' => [
+            'robots'  => ['url' => self::HOME_URL . 'robots.txt', 'status' => 200, 'state' => 'ok',
+                'disallow_all' => ['*', 'yandex'], 'sitemaps' => []],
+            'sitemap' => ['url' => self::HOME_URL . 'sitemap.xml', 'status' => 200, 'state' => 'ok',
+                'is_index' => true, 'sitemaps_count' => 12, 'urls_count' => 5000, 'truncated' => false],
+        ]]);
+        $rows = array_column(buildReport($diagnostic, [], [], [])['summary']['rows'], null, 'label');
+
+        $this->assertSame('закрыт для всех роботов, Яндекса', $rows['robots.txt']['value']);
+        $this->assertSame(REPORT_BADGE_BAD, $rows['robots.txt']['badgeClass']);
+        $this->assertSame(self::HOME_URL . 'sitemap.xml (200)', $rows['sitemap.xml']['value']);
+        $this->assertSame('индекс из 12 файлов, в первом — 5000 адресов', $rows['Адресов в sitemap']['value']);
+    }
+
+    public function testSeoRowsForMissingBlockedAndTruncated(): void
+    {
+        $rows = buildReportSeoRows([
+            'robots'  => ['status' => 404, 'state' => 'missing', 'disallow_all' => []],
+            'sitemap' => ['url' => self::HOME_URL . 'sitemap.xml', 'status' => 404, 'state' => 'missing'],
+        ]);
+        $this->assertSame(['нет (404)', 'не найден'], array_column($rows, 'value'));
+
+        $rows = buildReportSeoRows([
+            'robots'  => ['status' => 403, 'state' => 'blocked'],
+            'sitemap' => ['url' => self::HOME_URL . 's.xml', 'status' => 200, 'state' => 'ok', 'is_index' => false,
+                'urls_count' => 41000, 'truncated' => true],
+        ]);
+        $this->assertSame(REPORT_SEO_BLOCKED_VALUE, $rows[0]['value']);
+        $this->assertSame('не меньше 41000 (файл обрезан по размеру)', $rows[2]['value']);
+        $this->assertSame([], buildReportSeoRows(['robots' => 'битое']));
+    }
+
     public function testProductUrlIsShownOnlyWhenSet(): void
     {
         $diagnostic = $this->diagnostic();

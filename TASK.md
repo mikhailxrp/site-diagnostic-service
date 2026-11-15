@@ -4,101 +4,104 @@
 Phase 2 — Глубокая проверка и история
 
 ## Задача
-Битые ресурсы, PHP-ошибки и mixed content проверяются на каждой найденной странице (главная, категория, товар,
-корзина, оформление) с общим кэшем ресурсов; страница-заглушка защиты от ботов распознаётся по содержимому →
-`blocked = 1`, «не удалось проверить», без ложных находок; в отчёте находки можно смотреть и по страницам.
+Новый шаг `seo` «Базовое SEO» (после `resources`, последний) проверяет robots.txt (доступность, закрыт ли сайт
+целиком), sitemap.xml (из `Sitemap:` в robots или `/sitemap.xml`) и на проверенных страницах — title, description,
+canonical, `noindex` / `nofollow` (meta и `X-Robots-Tag`); находки `seo`, итоги robots / sitemap — в сводке отчёта.
 
 ## Образец
-Образца нет: компоненты Tabler (решение владельца, 15.11.2026). Изменения экрана отчёта:
-- карточка «Проверенные страницы»: у заблокированной страницы — бейдж «не удалось проверить» и название защиты
-  («Cloudflare», «DDoS-Guard», «Qrator», «капча»);
-- карточка «Находки»: вкладки Tabler (`nav-tabs`) «По серьёзности» (как сейчас) и «По страницам» (группа на каждую
-  проверенную страницу, внутри — её находки; находка с несколькими страницами — в каждой группе);
-- у находки, найденной на нескольких страницах, — строка «Страницы:» со списком адресов вместо одной «Страница:».
+Образца нет: компоненты Tabler (решение владельца, 15.11.2026). Изменение экрана отчёта:
+- карточка «Сводка»: строки «robots.txt» (код ответа / «закрыт для всех роботов» / «не удалось проверить»),
+  «sitemap.xml» (адрес и код), «Адресов в sitemap» (число; у индекса — «индекс из N файлов, в первом — M адресов»);
+- SEO-находки — в общем списке и во вкладке «По страницам» (как есть после таска 4);
+- старая диагностика без шага `seo` → этих строк нет.
 
-## Решения (15.11.2026, подтверждены владельцем)
-- `blocked` ставится при записи страницы: в `runAvailabilityStep()` и `runCrawlStep()` через
-  `insertCheckedPage([... 'blocked' => ...])` — модель это уже поддерживает, без миграции
-- Признак заглушки — содержимое (`Just a moment…`, `cf-chl-`, `challenge-platform`, скрипт проверки DDoS-Guard,
-  Qrator, SmartCaptcha / reCAPTCHA / hCaptcha на почти пустой странице) или заголовок `cf-mitigated: challenge`.
-  Одних заголовков CDN (`Server: ddos-guard`, `cf-ray`) и кода 403/503 недостаточно — иначе ложная пометка sudar.su
-- Признаки заглушек — данные в `data/bot-protection.php` (как `signatures.php` и `shop-patterns.php`: пополняются
-  без правки кода; решение «сигнатуры — файлы в `data/`» из `_status.md`)
-- Между страницами объединяются: битый ресурс — одна находка на адрес (`page_id` — первая страница, все —
-  в `evidence.pages`); mixed content — так же; PHP-ошибка — одна находка на `fingerprint` со списком страниц
-- Страницы с одним итоговым адресом (корзина = оформление, как `/checkout/` у sudar.su) проверяются один раз
-- Заблокированная страница: ресурсы / PHP-ошибки / mixed content по ней не проверяются; сообщение шага —
-  «Проверено страниц: N, не удалось: M; ресурсов …»
+## Решения (15.11.2026, владелец доверил выбор; перепроверены)
+- **Серьёзности и правила — в одной таблице констант** в начале `SeoCheck.php` (`SEO_SEVERITY`,
+  `SEO_PAGE_RULES`: какой тип страницы что проверяет). Поменять серьёзность или включить проверку для другого
+  типа страницы — одна строка, остальной код не трогается
+- **robots.txt** (`<origin>/robots.txt`, origin — итоговый адрес главной):
+  - 404 или HTML вместо текста («мягкий 404») → `low` «нет robots.txt»; 5xx / нет ответа → `medium`;
+  - `Disallow: /` в группе `User-agent: *`, `Yandex` или `Googlebot` → `high` с именем робота; пустой `Disallow:`
+    разрешает всё; `Allow: /` в той же группе отменяет запрет; несколько `User-agent` подряд — одна группа;
+  - ответила заглушка защиты от ботов (`detectBotProtection()`) → «не удалось проверить», без находки
+- **sitemap**: адреса из `Sitemap:` robots, иначе `/sitemap.xml`; читается первый ответивший. Нет ни одного → `low`;
+  4xx / 5xx / битый XML → `medium`; 0 `<loc>` → `low`. Сжатый (`.gz`, сигнатура gzip) распаковывается.
+  Индекс (`<sitemapindex>`) → число вложенных файлов + адреса только в первом вложенном (решение владельца)
+- **страницы**: главная + найденные шагом `crawl`, без заглушек (`bot_protection`) и без ответов не 2xx; одна
+  страница под несколькими типами — один раз. По умолчанию (`SEO_PAGE_RULES`):
+  - title / description — главная, категория, товар; корзина и оформление — нет (им можно быть пустыми);
+  - нет `<title>` или пустой → `low`; одинаковый title у разных страниц → одна находка `low`, страницы —
+    в `evidence.pages`; нет meta description → одна находка `low` со списком страниц;
+  - canonical на другой хост (без `www.`) → `medium`; canonical на свою страницу или вариант с www — не находка;
+  - `noindex` (meta robots / `X-Robots-Tag`): главная → `high`, категория / товар → `medium`;
+    корзина / оформление — не находка;
+  - `nofollow`: главная / категория → `medium`
+- **www / без www** шаг `seo` не проверяет — находка остаётся только из Фазы 1 (`AvailabilityCheck`)
+- Итоги robots / sitemap → `summary_json.seo` (`updateDiagnosticSummary()`), без миграции
+- `HtmlParser` дополняется ключом `title` (текст первого `<title>` или `null`); `meta` и `links` (canonical) уже есть
 
 ## Отклонения и заметки по реализации
-- Порог «почти пустой страницы» — 600 символов видимого текста, а не 1500: обычная страница контактов с формой и
-  капчей набирает ~1400 и ложно считалась заглушкой (тест `testRealPageWithCaptchaInFormIsNotBlocked`)
-- У капчи признаки — `thin_markup`: ищутся в разметке без `<script>` / `<style>` (виджет `smart-captcha`,
-  `g-recaptcha` …). Найдено на sudar.su: пустая корзина `/checkout/` (80 символов текста) подключает скрипт
-  SmartCaptcha на всех страницах и ложно помечалась «капча»; регрессия `testThinPageWithCaptchaOnlyInScriptsIsNotBlocked`
-- Название защиты и признак для отчёта — в `summary_json.blocked` (id страницы → `{title, reason}`, слияние через
-  `updateDiagnosticSummary()`); у старых записей с `blocked = 1` без сводки — общая формулировка
-- Бейдж «не удалось проверить» стоит рядом с названием страницы, а не рядом с кодом ответа: на 360 px два бейджа
-  справа сжимали колонку с текстом
-- Вкладка «По страницам»: адрес страницы — отдельной строкой под шапкой группы (у `list-group-header` в Tabler
-  заглавные буквы); находки без страницы (SSL и т. п.) — группа «Сайт целиком»
-- Сообщение шага считает уникальные страницы: корзина = оформление → «Проверено страниц: 4» при 5 типах
-- Вживую: sudar.su — 4 страницы, ни одна не `blocked`, 12 битых ресурсов (6 общих для 3–4 страниц; 6 — код 403 у
-  ресурсов компонента `sale.order.ajax` на оформлении, повторяется при повторном запросе); cleansan.ru — 4 страницы,
-  13 битых картинок общие для всех 4; citilink.ru — 3 страницы, воркер не падает, 19 битых (шрифты, картинка).
-  Диагностика занимает 1,5–3 минуты (400+ ресурсов)
-- `composer test` — системный PHP 8.4 без `intl` (см. dev-log), тесты запускались PHP 8.3 OpenServer: 447 OK
+- Добавлена находка `sitemap_bad_loc` (`medium`, в той же таблице `SEO_SEVERITY`): записи `<loc>`, которые не
+  адреса http(s). Найдено вживую: у sudar.su в sitemap-индексе `<loc>Array</loc>` — ошибка кода сайта; адреса
+  считаются по первому правильному вложенному файлу (224). Регрессия `testNonUrlLocInSitemapIsFindingAndSkippedForCounting`
+- Типовой `/sitemap.xml`, отдающий HTML-страницу, — «нет карты» (`low`), а не «битый XML» (`medium`)
+- Обрезанный по размеру sitemap (лимит HttpClient) не разбирается как XML — адреса считаются по тегам, в отчёте
+  «не меньше N (файл обрезан по размеру)»
+- В `summary_json` поля со значением null не сохраняются (`JSON_MERGE_PATCH` удаляет null) — отчёт читает их через `??`
+- Строки сводки выводит существующий цикл карточки «Сводка» — `diagnostic.php` не менялся
+- Вживую: sudar.su — robots есть, sitemap-индекс из 2 файлов (224 адреса в первом правильном), находка «Array»;
+  cleansan.ru — robots есть, sitemap `.xml.gz` из robots, 50000 адресов; citilink.ru — индекс из 26 файлов, в первом
+  809 адресов. Title / description / canonical / noindex на найденных страницах у всех трёх в порядке — находок нет.
+  Экран — 360 / 768 / 1280 px без горизонтальной прокрутки, консоль чистая
+- Тесты — 480 OK на PHP 8.3 OpenServer (+ `SeoCheckTest` 30 тестов, фикстуры `tests/fixtures/seo/`)
 
 ## Scope — что трогаем
-- [x] `data/bot-protection.php` — создать: по защите (`cloudflare`, `ddos-guard`, `qrator`, `captcha`) название,
-      признаки в HTML, признаки в заголовках, порог «почти пустой страницы» для капчи
-- [x] `src/Services/Checks/BotProtectionCheck.php` — создать, без сети и БД:
-      `detectBotProtection(array $response, ?array $rules = null): ?array` → `{provider, title, reason}` или `null`
-- [x] `src/Services/Checks/ResourceCheck.php` — изменить: `runResourceCheck()` по всем страницам из
-      `facts.availability.home` и `facts.crawl.pages` (без дублей по итоговому адресу, пропуская `blocked`);
-      общий кэш проверенных адресов (в т. ч. CSS и вложенные `url()`); одна находка на ресурс с `evidence.pages`;
-      факты: `pages` (проверенные / пропущенные), `resources`, `limited`
-- [x] `src/Services/Checks/PhpErrorCheck.php`, `src/Services/Checks/MixedContentCheck.php` — не понадобилось:
-      объединение сделано в `DiagnosticRunner` (`mergePageFindings()`), файлы не тронуты
-- [x] `src/Services/DiagnosticRunner.php` — изменить: `runAvailabilityStep()` / `runCrawlStep()` — `blocked` и
-      название защиты в фактах страницы, флаг — в `checked_pages`; `addPageErrorFindings()` — PHP-ошибки и mixed
-      content по всем проверенным страницам, объединение по `fingerprint`; новое сообщение шага `resources`
-- [x] `src/Services/ReportBuilder.php` — изменить: `buildReportPages()` — `blocked` → «не удалось проверить» +
-      защита; `buildReportFinding()` — `pageUrls` из `evidence.pages`; новый `buildReportFindingsByPage()`;
-      предупреждение в сводке учитывает `blocked` главной
-- [x] `src/Views/pages/diagnostic.php` — изменить: вкладки «По серьёзности» / «По страницам», пометка у страницы
-- [x] `src/Views/components/finding.php` — изменить: список страниц у находки
-- [x] `tests/Unit/BotProtectionCheckTest.php` — создать: Cloudflare challenge, DDoS-Guard, Qrator, капча → защита;
-      обычная страница с `Server: ddos-guard` и настоящим HTML → `null`; 403 без признаков → `null`
-- [x] `tests/fixtures/bot-protection/*.html` — создать, синтетические заглушки и «настоящая страница за DDoS-Guard»
-- [x] `tests/Unit/ResourceCheckTest.php`, `tests/Unit/DiagnosticRunnerTest.php`, `tests/Unit/ReportBuilderTest.php` —
-      дополнить
+- [x] `src/Services/Checks/SeoCheck.php` — создать, без БД, сеть параметром:
+      `runSeoCheck(array $context, callable $request, ?array $botRules = null): array`; таблица констант правил;
+      разбор robots.txt (группы, `Disallow`, `Allow`, `Sitemap`), sitemap (urlset / sitemapindex, `<loc>`, gzip),
+      проверки страниц, находки `seo` (`page_id` — первая страница, `evidence.pages`); факты: `robots`, `sitemap`,
+      `pages`
+- [x] `src/Services/HtmlParser.php` — изменить: ключ `title`
+- [x] `src/Services/DiagnosticRunner.php` — изменить: шаг `seo` («Базовое SEO») после `resources`,
+      `runSeoStep()`, итоги — в `summary_json.seo`
+- [x] `src/Services/ReportBuilder.php` — изменить: строки «robots.txt», «sitemap.xml», «Адресов в sitemap» в
+      `buildReportSummary()`
+- [x] `src/Views/pages/diagnostic.php` — не понадобилось: строки сводки выводятся общим циклом, файл не тронут
+- [x] `tests/Unit/SeoCheckTest.php` — создать; `request` подменяется заглушкой по фикстурам
+- [x] `tests/fixtures/seo/` — создать: robots.txt (обычный, `Disallow: /` для всех, для Yandex, с `Allow: /`,
+      с `Sitemap:`), sitemap (urlset, sitemapindex, пустой, битый, gzip), страницы (noindex, чужой canonical,
+      без title / description)
+- [x] `tests/Unit/HtmlParserTest.php`, `tests/Unit/DiagnosticRunnerTest.php`, `tests/Unit/ReportBuilderTest.php` —
+      дополнить (`title`; порядок шагов; строки сводки)
 
 ## Out of scope — не трогаем
-- SEO найденных страниц (таск 5), устаревшие версии и уязвимости (таски 6–8)
-- Обход защиты (cookie, повтор с другим User-Agent, браузер) — Фаза 3
-- Определение стека по заглушке (`StackCheck` / `StackDetector`), логика поиска страниц (`ShopCrawler`) —
-  кроме передачи флага `blocked` в `runCrawlStep()`
-- Схема БД (`blocked` уже есть), `HttpClient.php`, `PageModel.php`, `FindingModel.php`
-- Лимиты числа страниц и ресурсов (решение владельца), рефакторинг
+- Устаревшие версии и уязвимости (таски 6–8), скорость и PageSpeed (Фаза 3)
+- Обход всего sitemap и проверка его адресов на 404; длина title / description, `h1`, микроразметка, hreflang
+- Проверка www / без www (есть в `AvailabilityCheck`, Фаза 1)
+- `ShopCrawler`, `ResourceCheck`, `BotProtectionCheck` (кроме вызова `detectBotProtection()`), `HttpClient`,
+  схема БД, рефакторинг
+- Лимиты числа запросов (решение владельца)
 
 ## Definition of Done
-- [x] Один и тот же битый ресурс на 3 страницах — одна находка, `page_id` первой страницы, 3 адреса в
-      `evidence.pages` (тест)
-- [x] Общий для нескольких страниц ресурс запрашивается один раз (тест: счётчик вызовов заглушки `request`)
-- [x] Одна PHP-ошибка на 2 страницах — одна находка со списком страниц; разные ошибки — разные находки (тест)
-- [x] Страница-заглушка Cloudflare challenge → `blocked = 1`, по ней нет находок `broken_resource` / `php_error` /
-      `mixed_content` (тест)
-- [x] DDoS-Guard, Qrator, капча распознаются; обычная страница с `Server: ddos-guard` и 403 без признаков — нет (тест)
-- [x] Корзина и оформление с одним адресом проверяются один раз (тест)
-- [x] В отчёте у заблокированной страницы «не удалось проверить» и защита; вкладка «По страницам» группирует
-      находки (тест ReportBuilder + браузер)
-- [x] Старые диагностики (только главная, находки без `evidence.pages`) открываются без ошибок
-- [x] Экран соответствует описанию в «Образце» по расположению и составу, состояния реализованы; только компоненты
-      Tabler без своих стилей; проверено на 360 / 768 / 1280 px, зоны нажатия от 44 px
-- [x] Вживую: sudar.su (DDoS-Guard отдаёт настоящую страницу) не помечается `blocked`, ресурсы проверены на всех
-      найденных страницах; cleansan.ru — находки по страницам правдоподобны; citilink.ru — воркер не падает
-- [x] `composer test` проходит, `app.log` без ошибок, консоль браузера чистая
+- [x] `noindex` на главной (meta или `X-Robots-Tag`) или `Disallow: /` для всех → находка `high` (тест)
+- [x] `Disallow: /` только для Yandex → `high` с именем робота; `Disallow: /admin/`, пустой `Disallow:` и
+      `Disallow: /` + `Allow: /` → находки нет (тест)
+- [x] Пустой или одинаковый title на разных страницах → находка `low`; одинаковый — одна находка со списком
+      страниц (тест)
+- [x] canonical на чужой домен → `medium`; на свою страницу или вариант с www → находки нет (тест)
+- [x] sitemap из `Sitemap:` robots используется вместо `/sitemap.xml`; индекс → число файлов и адреса первого;
+      gzip читается; битый XML → `medium`; нет sitemap → `low` (тест)
+- [x] robots.txt — заглушка защиты от ботов → «не удалось проверить», без находки (тест)
+- [x] Корзина / оформление с `noindex` и без title — без находок; страница с ответом 404 не проверяется (тест)
+- [x] Серьёзность меняется правкой одной константы — тест читает её из `SEO_SEVERITY`, а не из литерала
+- [x] Находка «www и без www — разные сайты» из Фазы 1 не дублируется: шаг `seo` www не проверяет (тест)
+- [x] В «Сводке» строки robots.txt / sitemap.xml / число адресов; у старой диагностики без `seo` их нет
+      (тест ReportBuilder + браузер)
+- [x] Экран соответствует описанию в «Образце» по расположению и составу; только компоненты Tabler без своих стилей;
+      проверено на 360 / 768 / 1280 px
+- [x] Вживую: sudar.su, cleansan.ru, citilink.ru — robots / sitemap найдены или причина понятна, находки
+      правдоподобны, воркер не падает
+- [x] `composer test` проходит (PHP 8.3 OpenServer), `app.log` без ошибок, консоль браузера чистая
 - [x] Проверить `.docs/dod-global.md`
 
 ## Важные правила

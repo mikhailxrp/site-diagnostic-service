@@ -12,6 +12,17 @@
 
 ---
 
+**Дата:** 16.11.2026
+**Что сделано:** Phase 2, таск 5 «Базовое SEO» ✅. Перед началом — коммит таска 4 (`05ffeb6`).
+- `Checks/SeoCheck.php` (без БД, сеть параметром), шаг `seo` «Базовое SEO» — последний, после `resources`. Серьёзности — таблица `SEO_SEVERITY`, что проверяется на каком типе страницы — `SEO_PAGE_RULES` (правка одной строкой, тесты читают серьёзность из таблицы).
+- robots.txt: 404 / HTML вместо текста → `low`, 5xx / нет ответа → `medium`; `Disallow: /` для `*` / Yandex / Googlebot → `high` с именами роботов (пустой `Disallow:` и `Allow: /` в группе — не запрет; несколько `User-agent` подряд — одна группа); заглушка защиты от ботов → «не удалось проверить».
+- sitemap: из `Sitemap:` robots, иначе `/sitemap.xml`; gzip распаковывается; обрезанный по размеру считается по тегам; индекс — число файлов + адреса первого правильного вложенного. Нет → `low` (в т. ч. HTML-страница по типовому адресу), из robots не открывается / битый XML → `medium`, пустой → `low`, записи `<loc>` не адреса → `medium` (`sitemap_bad_loc`).
+- Страницы (главная + найденные `crawl`, без заглушек и ответов не 2xx; корзина и оформление не проверяются): нет title, одинаковый title, нет description — по одной находке `low` со списком страниц; canonical на другой хост (без `www.`) → `medium`; `noindex` (meta robots / yandex / googlebot, `X-Robots-Tag`, `none`): главная `high`, категория / товар `medium`; `nofollow` на главной / категории → `medium`. www / без www шаг не проверяет (находка Фазы 1 не дублируется).
+- `HtmlParser` + ключ `title`; `DiagnosticRunner::runSeoStep()` — итоги в `summary_json.seo`; `ReportBuilder::buildReportSeoRows()` — строки «robots.txt», «sitemap.xml», «Адресов в sitemap» в «Сводке» (у старых диагностик нет). `diagnostic.php` не менялся.
+- Найдено вживую: у sudar.su в sitemap-индексе `<loc>Array</loc>` (ошибка кода сайта) → добавлена находка `sitemap_bad_loc`, регрессионный тест. cleansan.ru — sitemap `.xml.gz` из robots, 50000 адресов; citilink.ru — индекс из 26 файлов, 809 адресов в первом; title / description / canonical / noindex у всех трёх в порядке. Экран — 360 / 768 / 1280 px, консоль чистая. Тесты — 480 OK на PHP 8.3 OpenServer (+ `SeoCheckTest` 30 тестов с фикстурами `tests/fixtures/seo/`, `HtmlParserTest`, `DiagnosticRunnerTest`, `ReportBuilderTest`). Тестовые диагностики удалены, `app.log` пуст.
+- Заметка: `JSON_MERGE_PATCH` в `updateDiagnosticSummary()` не сохраняет поля со значением null — отчёт читает их через `??`.
+**Что следующее:** Phase 2, таск 6 «Устаревшие версии и еженедельное обновление баз» — создать TASK.md.
+
 **Дата:** 15.11.2026
 **Что сделано:** Phase 2, таск 4 «Проверки на всех страницах и защита от ботов» ✅. Перед началом — коммит таска 3 (`7e8f12c`).
 - `data/bot-protection.php` + `Checks/BotProtectionCheck.php` (`detectBotProtection()`, без сети и БД): Cloudflare, DDoS-Guard, Qrator, капча, общие «Checking your browser». Заглушка сразу — по заголовку (`cf-mitigated: challenge`) или признаку, который бывает только на заглушке (`window._cf_chl_opt`, `<title>DDoS-Guard</title>`, `/__qrator/qauth`, `/showcaptcha?`); по «слабым» признакам (скрипт защиты, виджет капчи) — только на почти пустой странице (≤ 600 символов видимого текста). Заголовков CDN и кода 403/503 мало.
