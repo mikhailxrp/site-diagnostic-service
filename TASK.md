@@ -30,29 +30,48 @@ Phase 2 — Глубокая проверка и история
 - Заблокированная страница: ресурсы / PHP-ошибки / mixed content по ней не проверяются; сообщение шага —
   «Проверено страниц: N, не удалось: M; ресурсов …»
 
+## Отклонения и заметки по реализации
+- Порог «почти пустой страницы» — 600 символов видимого текста, а не 1500: обычная страница контактов с формой и
+  капчей набирает ~1400 и ложно считалась заглушкой (тест `testRealPageWithCaptchaInFormIsNotBlocked`)
+- У капчи признаки — `thin_markup`: ищутся в разметке без `<script>` / `<style>` (виджет `smart-captcha`,
+  `g-recaptcha` …). Найдено на sudar.su: пустая корзина `/checkout/` (80 символов текста) подключает скрипт
+  SmartCaptcha на всех страницах и ложно помечалась «капча»; регрессия `testThinPageWithCaptchaOnlyInScriptsIsNotBlocked`
+- Название защиты и признак для отчёта — в `summary_json.blocked` (id страницы → `{title, reason}`, слияние через
+  `updateDiagnosticSummary()`); у старых записей с `blocked = 1` без сводки — общая формулировка
+- Бейдж «не удалось проверить» стоит рядом с названием страницы, а не рядом с кодом ответа: на 360 px два бейджа
+  справа сжимали колонку с текстом
+- Вкладка «По страницам»: адрес страницы — отдельной строкой под шапкой группы (у `list-group-header` в Tabler
+  заглавные буквы); находки без страницы (SSL и т. п.) — группа «Сайт целиком»
+- Сообщение шага считает уникальные страницы: корзина = оформление → «Проверено страниц: 4» при 5 типах
+- Вживую: sudar.su — 4 страницы, ни одна не `blocked`, 12 битых ресурсов (6 общих для 3–4 страниц; 6 — код 403 у
+  ресурсов компонента `sale.order.ajax` на оформлении, повторяется при повторном запросе); cleansan.ru — 4 страницы,
+  13 битых картинок общие для всех 4; citilink.ru — 3 страницы, воркер не падает, 19 битых (шрифты, картинка).
+  Диагностика занимает 1,5–3 минуты (400+ ресурсов)
+- `composer test` — системный PHP 8.4 без `intl` (см. dev-log), тесты запускались PHP 8.3 OpenServer: 447 OK
+
 ## Scope — что трогаем
-- [ ] `data/bot-protection.php` — создать: по защите (`cloudflare`, `ddos-guard`, `qrator`, `captcha`) название,
+- [x] `data/bot-protection.php` — создать: по защите (`cloudflare`, `ddos-guard`, `qrator`, `captcha`) название,
       признаки в HTML, признаки в заголовках, порог «почти пустой страницы» для капчи
-- [ ] `src/Services/Checks/BotProtectionCheck.php` — создать, без сети и БД:
+- [x] `src/Services/Checks/BotProtectionCheck.php` — создать, без сети и БД:
       `detectBotProtection(array $response, ?array $rules = null): ?array` → `{provider, title, reason}` или `null`
-- [ ] `src/Services/Checks/ResourceCheck.php` — изменить: `runResourceCheck()` по всем страницам из
+- [x] `src/Services/Checks/ResourceCheck.php` — изменить: `runResourceCheck()` по всем страницам из
       `facts.availability.home` и `facts.crawl.pages` (без дублей по итоговому адресу, пропуская `blocked`);
       общий кэш проверенных адресов (в т. ч. CSS и вложенные `url()`); одна находка на ресурс с `evidence.pages`;
       факты: `pages` (проверенные / пропущенные), `resources`, `limited`
-- [ ] `src/Services/Checks/PhpErrorCheck.php`, `src/Services/Checks/MixedContentCheck.php` — изменить только если
-      объединение по `fingerprint` удобнее держать в них (иначе — в `DiagnosticRunner`, эти файлы не трогаем)
-- [ ] `src/Services/DiagnosticRunner.php` — изменить: `runAvailabilityStep()` / `runCrawlStep()` — `blocked` и
+- [x] `src/Services/Checks/PhpErrorCheck.php`, `src/Services/Checks/MixedContentCheck.php` — не понадобилось:
+      объединение сделано в `DiagnosticRunner` (`mergePageFindings()`), файлы не тронуты
+- [x] `src/Services/DiagnosticRunner.php` — изменить: `runAvailabilityStep()` / `runCrawlStep()` — `blocked` и
       название защиты в фактах страницы, флаг — в `checked_pages`; `addPageErrorFindings()` — PHP-ошибки и mixed
       content по всем проверенным страницам, объединение по `fingerprint`; новое сообщение шага `resources`
-- [ ] `src/Services/ReportBuilder.php` — изменить: `buildReportPages()` — `blocked` → «не удалось проверить» +
+- [x] `src/Services/ReportBuilder.php` — изменить: `buildReportPages()` — `blocked` → «не удалось проверить» +
       защита; `buildReportFinding()` — `pageUrls` из `evidence.pages`; новый `buildReportFindingsByPage()`;
       предупреждение в сводке учитывает `blocked` главной
-- [ ] `src/Views/pages/diagnostic.php` — изменить: вкладки «По серьёзности» / «По страницам», пометка у страницы
-- [ ] `src/Views/components/finding.php` — изменить: список страниц у находки
-- [ ] `tests/Unit/BotProtectionCheckTest.php` — создать: Cloudflare challenge, DDoS-Guard, Qrator, капча → защита;
+- [x] `src/Views/pages/diagnostic.php` — изменить: вкладки «По серьёзности» / «По страницам», пометка у страницы
+- [x] `src/Views/components/finding.php` — изменить: список страниц у находки
+- [x] `tests/Unit/BotProtectionCheckTest.php` — создать: Cloudflare challenge, DDoS-Guard, Qrator, капча → защита;
       обычная страница с `Server: ddos-guard` и настоящим HTML → `null`; 403 без признаков → `null`
-- [ ] `tests/fixtures/bot-protection/*.html` — создать, синтетические заглушки и «настоящая страница за DDoS-Guard»
-- [ ] `tests/Unit/ResourceCheckTest.php`, `tests/Unit/DiagnosticRunnerTest.php`, `tests/Unit/ReportBuilderTest.php` —
+- [x] `tests/fixtures/bot-protection/*.html` — создать, синтетические заглушки и «настоящая страница за DDoS-Guard»
+- [x] `tests/Unit/ResourceCheckTest.php`, `tests/Unit/DiagnosticRunnerTest.php`, `tests/Unit/ReportBuilderTest.php` —
       дополнить
 
 ## Out of scope — не трогаем
@@ -64,23 +83,23 @@ Phase 2 — Глубокая проверка и история
 - Лимиты числа страниц и ресурсов (решение владельца), рефакторинг
 
 ## Definition of Done
-- [ ] Один и тот же битый ресурс на 3 страницах — одна находка, `page_id` первой страницы, 3 адреса в
+- [x] Один и тот же битый ресурс на 3 страницах — одна находка, `page_id` первой страницы, 3 адреса в
       `evidence.pages` (тест)
-- [ ] Общий для нескольких страниц ресурс запрашивается один раз (тест: счётчик вызовов заглушки `request`)
-- [ ] Одна PHP-ошибка на 2 страницах — одна находка со списком страниц; разные ошибки — разные находки (тест)
-- [ ] Страница-заглушка Cloudflare challenge → `blocked = 1`, по ней нет находок `broken_resource` / `php_error` /
+- [x] Общий для нескольких страниц ресурс запрашивается один раз (тест: счётчик вызовов заглушки `request`)
+- [x] Одна PHP-ошибка на 2 страницах — одна находка со списком страниц; разные ошибки — разные находки (тест)
+- [x] Страница-заглушка Cloudflare challenge → `blocked = 1`, по ней нет находок `broken_resource` / `php_error` /
       `mixed_content` (тест)
-- [ ] DDoS-Guard, Qrator, капча распознаются; обычная страница с `Server: ddos-guard` и 403 без признаков — нет (тест)
-- [ ] Корзина и оформление с одним адресом проверяются один раз (тест)
-- [ ] В отчёте у заблокированной страницы «не удалось проверить» и защита; вкладка «По страницам» группирует
+- [x] DDoS-Guard, Qrator, капча распознаются; обычная страница с `Server: ddos-guard` и 403 без признаков — нет (тест)
+- [x] Корзина и оформление с одним адресом проверяются один раз (тест)
+- [x] В отчёте у заблокированной страницы «не удалось проверить» и защита; вкладка «По страницам» группирует
       находки (тест ReportBuilder + браузер)
-- [ ] Старые диагностики (только главная, находки без `evidence.pages`) открываются без ошибок
-- [ ] Экран соответствует описанию в «Образце» по расположению и составу, состояния реализованы; только компоненты
+- [x] Старые диагностики (только главная, находки без `evidence.pages`) открываются без ошибок
+- [x] Экран соответствует описанию в «Образце» по расположению и составу, состояния реализованы; только компоненты
       Tabler без своих стилей; проверено на 360 / 768 / 1280 px, зоны нажатия от 44 px
-- [ ] Вживую: sudar.su (DDoS-Guard отдаёт настоящую страницу) не помечается `blocked`, ресурсы проверены на всех
+- [x] Вживую: sudar.su (DDoS-Guard отдаёт настоящую страницу) не помечается `blocked`, ресурсы проверены на всех
       найденных страницах; cleansan.ru — находки по страницам правдоподобны; citilink.ru — воркер не падает
-- [ ] `composer test` проходит, `app.log` без ошибок, консоль браузера чистая
-- [ ] Проверить `.docs/dod-global.md`
+- [x] `composer test` проходит, `app.log` без ошибок, консоль браузера чистая
+- [x] Проверить `.docs/dod-global.md`
 
 ## Важные правила
 - Следовать `CLAUDE.md`

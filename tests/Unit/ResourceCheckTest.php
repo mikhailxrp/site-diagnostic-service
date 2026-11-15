@@ -373,13 +373,13 @@ final class ResourceCheckTest extends TestCase
         $html = '<img src="http://shop.test/a.png" alt="">'
             . '<b>Warning</b>:  Undefined index: id in <b>/var/www/index.php</b> on line <b>3</b>';
         $context = $this->context($html);
-        $result = addPageErrorFindings(
-            runResourceCheck($context, $this->request()),
-            $context['facts']['availability']['home']
-        );
+        $result = addPageErrorFindings(runResourceCheck($context, $this->request()), $context);
 
         $this->assertSame(['php_error', 'mixed_content'], array_column($result['findings'], 'category'));
-        $this->assertSame('Проверено ресурсов: 1, битых: 0; PHP-ошибок: 1; mixed content: 1', $result['message']);
+        $this->assertSame(
+            'Проверено страниц: 1; ресурсов: 1, битых: 0; PHP-ошибок: 1; mixed content: 1',
+            $result['message']
+        );
         foreach ($result['findings'] as $finding) {
             $this->assertSame(self::PAGE_ID, $finding['page_id']);
         }
@@ -387,8 +387,157 @@ final class ResourceCheckTest extends TestCase
 
     public function testStepKeepsSkippedResult(): void
     {
-        $skipped = runResourceCheck($this->context(null), $this->request());
+        $context = $this->context(null);
+        $skipped = runResourceCheck($context, $this->request());
 
-        $this->assertSame($skipped, addPageErrorFindings($skipped, []));
+        $this->assertSame($skipped, addPageErrorFindings($skipped, $context));
+    }
+
+    /**
+     * Контекст с главной и страницами шага `crawl`: тип → [HTML, поля поверх обычных].
+     *
+     * @param array<string, array{0: string, 1?: array<string, mixed>}> $crawlPages
+     */
+    private function multiPageContext(string $homeHtml, array $crawlPages): array
+    {
+        $context = $this->context($homeHtml);
+        $pageId = self::PAGE_ID;
+        foreach ($crawlPages as $type => $page) {
+            $url = "https://shop.test/{$type}/";
+            $context['facts']['crawl']['pages'][$type] = ($page[1] ?? []) + [
+                'type'      => $type,
+                'url'       => $url,
+                'final_url' => $url,
+                'status'    => 200,
+                'time_ms'   => 5,
+                'error'     => null,
+                'found_by'  => 'link_heuristic',
+                'headers'   => [],
+                'body'      => $page[0],
+                'truncated' => false,
+                'page_id'   => ++$pageId,
+            ];
+        }
+
+        return $context;
+    }
+
+    public function testSameBrokenResourceOnThreePagesIsOneFinding(): void
+    {
+        $html = '<img src="/broken.png" alt="">';
+        $result = runResourceCheck(
+            $this->multiPageContext($html, ['category' => [$html], 'product' => [$html]]),
+            $this->request(['https://shop.test/broken.png' => ['status' => 404]])
+        );
+
+        $this->assertCount(1, $result['findings']);
+        $finding = $result['findings'][0];
+        $this->assertSame(self::PAGE_ID, $finding['page_id']);
+        $this->assertSame(
+            ['https://shop.test/', 'https://shop.test/category/', 'https://shop.test/product/'],
+            $finding['evidence']['pages']
+        );
+        $this->assertStringContainsString('Встречается на страницах: 3.', (string) $finding['details']);
+    }
+
+    public function testSharedResourceIsRequestedOnce(): void
+    {
+        $html = '<script src="/app.js"></script>';
+        runResourceCheck(
+            $this->multiPageContext($html, ['category' => [$html], 'product' => [$html . '<img src="/p.png" alt="">']]),
+            $this->request()
+        );
+
+        $this->assertSame(['HEAD https://shop.test/app.js', 'HEAD https://shop.test/p.png'], $this->requested);
+    }
+
+    public function testResourceFromSharedCssBelongsToAllPagesOfThatCss(): void
+    {
+        $html = '<link rel="stylesheet" href="/main.css">';
+        $result = runResourceCheck(
+            $this->multiPageContext('<link rel="stylesheet" href="/main.css">', ['category' => [$html]]),
+            $this->request([
+                'https://shop.test/main.css' => ['body' => '.hero { background: url(/bg.png); }'],
+                'https://shop.test/bg.png'   => ['status' => 404],
+            ])
+        );
+
+        $this->assertSame(['https://shop.test/bg.png'], array_column($result['findings'], 'location'));
+        $this->assertSame(
+            ['https://shop.test/', 'https://shop.test/category/'],
+            $result['findings'][0]['evidence']['pages']
+        );
+        $this->assertSame(1, count(array_filter($this->requested, static fn (string $r): bool => str_ends_with($r, '/main.css'))));
+    }
+
+    public function testBlockedPageIsNotCheckedAndGivesNoFindings(): void
+    {
+        $stub = '<img src="/stub.png" alt=""><img src="http://shop.test/a.png" alt="">'
+            . '<b>Warning</b>:  Undefined index: id in <b>/var/www/index.php</b> on line <b>3</b>';
+        $context = $this->multiPageContext('<img src="/ok.png" alt="">', [
+            'product' => [$stub, ['bot_protection' => ['provider' => 'cloudflare', 'title' => 'Cloudflare', 'reason' => 'x']]],
+        ]);
+        $result = addPageErrorFindings(
+            runResourceCheck($context, $this->request(['https://shop.test/stub.png' => ['status' => 404]])),
+            $context
+        );
+
+        $this->assertSame([], $result['findings']);
+        $this->assertSame(['HEAD https://shop.test/ok.png'], $this->requested);
+        $this->assertSame([true, false], array_column($result['facts']['pages'], 'checked'));
+        $this->assertStringStartsWith('Проверено страниц: 1, не удалось: 1;', $result['message']);
+    }
+
+    public function testCartAndCheckoutWithSameUrlAreCheckedOnce(): void
+    {
+        $context = $this->multiPageContext('', [
+            'cart'     => ['<img src="/cart.png" alt="">'],
+            'checkout' => ['<img src="/cart.png" alt="">'],
+        ]);
+        $context['facts']['crawl']['pages']['checkout']['final_url'] = 'https://shop.test/cart/';
+        $result = runResourceCheck($context, $this->request());
+
+        $this->assertSame([['home'], ['cart', 'checkout']], array_column($result['facts']['pages'], 'types'));
+        $this->assertSame(['HEAD https://shop.test/cart.png'], $this->requested);
+    }
+
+    public function testPageWithoutResponseIsSkipped(): void
+    {
+        $context = $this->multiPageContext('', ['product' => ['<img src="/p.png" alt="">', ['status' => null]]]);
+        $result = runResourceCheck($context, $this->request());
+
+        $this->assertCount(1, $result['facts']['pages']);
+        $this->assertSame([], $this->requested);
+    }
+
+    public function testSamePhpErrorOnTwoPagesIsOneFinding(): void
+    {
+        $error = '<b>Warning</b>:  Undefined index: id in <b>/var/www/header.php</b> on line <b>3</b>';
+        $other = '<b>Notice</b>:  Undefined variable: x in <b>/var/www/product.php</b> on line <b>9</b>';
+        $context = $this->multiPageContext($error, ['category' => [$error], 'product' => [$error . $other]]);
+        $result = addPageErrorFindings(runResourceCheck($context, $this->request()), $context);
+
+        $this->assertSame(['php_error', 'php_error'], array_column($result['findings'], 'category'));
+        [$shared, $single] = $result['findings'];
+        $this->assertSame(self::PAGE_ID, $shared['page_id']);
+        $this->assertSame(
+            ['https://shop.test/', 'https://shop.test/category/', 'https://shop.test/product/'],
+            $shared['evidence']['pages']
+        );
+        $this->assertSame(['https://shop.test/product/'], $single['evidence']['pages']);
+        $this->assertSame(self::PAGE_ID + 2, $single['page_id']);
+    }
+
+    public function testMixedContentOnTwoPagesIsOneFinding(): void
+    {
+        $html = '<script src="http://shop.test/old.js"></script>';
+        $context = $this->multiPageContext($html, ['category' => [$html]]);
+        $result = addPageErrorFindings(runResourceCheck($context, $this->request()), $context);
+
+        $this->assertSame(['mixed_content'], array_column($result['findings'], 'category'));
+        $this->assertSame(
+            ['https://shop.test/', 'https://shop.test/category/'],
+            $result['findings'][0]['evidence']['pages']
+        );
     }
 }

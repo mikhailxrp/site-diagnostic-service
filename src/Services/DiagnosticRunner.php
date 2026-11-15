@@ -19,6 +19,7 @@ require_once ROOT_PATH . '/src/Services/Checks/StackCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/ResourceCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/PhpErrorCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/MixedContentCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/BotProtectionCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
@@ -50,7 +51,8 @@ function getDiagnosticSteps(): array
 }
 
 /**
- * Шаг `availability` с настоящей сетью и БД: главная — в `checked_pages`, сводка — в `summary_json`.
+ * Шаг `availability` с настоящей сетью и БД: главная — в `checked_pages` (заглушка защиты от ботов — `blocked`),
+ * сводка — в `summary_json`.
  *
  * @param array<string, mixed> $context
  * @return array<string, mixed>
@@ -65,6 +67,7 @@ function runAvailabilityStep(array $context): array
 
     $diagnosticId = (int) $context['diagnostic']['id'];
     $home = $result['facts']['home'];
+    $botProtection = $home['status'] !== null ? detectBotProtection($home) : null;
 
     $pageId = insertCheckedPage($diagnosticId, [
         'url'         => $home['final_url'],
@@ -72,11 +75,15 @@ function runAvailabilityStep(array $context): array
         'found_by'    => 'start',
         'http_code'   => $home['status'],
         'response_ms' => $home['time_ms'],
+        'blocked'     => $botProtection !== null,
     ]);
     $result['facts']['home']['page_id'] = $pageId;
+    $result['facts']['home']['bot_protection'] = $botProtection;
     $result['findings'] = assignPageIdToFindings($result['findings'], $pageId, [$home['url'], $home['final_url']]);
 
-    updateDiagnosticSummary($diagnosticId, $result['summary']);
+    updateDiagnosticSummary($diagnosticId, $result['summary'] + [
+        'blocked' => buildBlockedPagesSummary([$pageId => $botProtection]),
+    ]);
 
     return $result;
 }
@@ -120,29 +127,38 @@ function runCrawlStep(array $context): array
         return $result;
     }
 
+    $blocked = [];
     foreach ($result['facts']['pages'] as $type => $page) {
+        $botProtection = $page['status'] !== null ? detectBotProtection($page) : null;
         $pageId = insertCheckedPage($diagnosticId, [
             'url'         => $page['final_url'],
             'page_type'   => $type,
             'found_by'    => $page['found_by'],
             'http_code'   => $page['status'],
             'response_ms' => $page['time_ms'],
+            'blocked'     => $botProtection !== null,
         ]);
+        $blocked[$pageId] = $botProtection;
         $result['facts']['pages'][$type]['page_id'] = $pageId;
+        $result['facts']['pages'][$type]['bot_protection'] = $botProtection;
         $result['findings'] = assignPageIdToFindings($result['findings'], $pageId, [$page['url'], $page['final_url']]);
     }
 
-    updateDiagnosticSummary($diagnosticId, ['pages' => [
-        'platforms' => $result['facts']['platforms'],
-        'missing'   => (object) $result['facts']['missing'],
-    ]]);
+    updateDiagnosticSummary($diagnosticId, [
+        'pages'   => [
+            'platforms' => $result['facts']['platforms'],
+            'missing'   => (object) $result['facts']['missing'],
+        ],
+        'blocked' => buildBlockedPagesSummary($blocked),
+    ]);
 
     return $result;
 }
 
 /**
- * Шаг `resources` с настоящей сетью: битые ресурсы, PHP-ошибки и mixed content главной. Находки сохраняет
- * `runDiagnostic()`; во время долгой проверки обновляется heartbeat, чтобы диагностику не сочли зависшей.
+ * Шаг `resources` с настоящей сетью: битые ресурсы, PHP-ошибки и mixed content главной и найденных страниц.
+ * Находки сохраняет `runDiagnostic()`; во время долгой проверки обновляется heartbeat, чтобы диагностику не сочли
+ * зависшей.
  *
  * @param array<string, mixed> $context
  * @return array<string, mixed>
@@ -157,34 +173,118 @@ function runResourcesStep(array $context): array
         static fn (int $checked) => touchDiagnosticHeartbeat($diagnosticId)
     );
 
-    return addPageErrorFindings($result, $context['facts']['availability']['home'] ?? []);
+    return addPageErrorFindings($result, $context);
 }
 
 /**
- * Дополняет результат проверки ресурсов PHP-ошибками из HTML главной и mixed content, пересчитывает сообщение.
+ * Для `summary_json.blocked`: id страницы → защита (название, причина). Страницы без защиты не попадают.
  *
- * @param array<string, mixed> $result результат `runResourceCheck()`
- * @param array<string, mixed> $home   главная из фактов шага `availability`
+ * @param array<int, array{provider: string, title: string, reason: string}|null> $botProtections
+ */
+function buildBlockedPagesSummary(array $botProtections): object
+{
+    $blocked = [];
+    foreach ($botProtections as $pageId => $botProtection) {
+        if ($botProtection !== null) {
+            $blocked[(string) $pageId] = ['title' => $botProtection['title'], 'reason' => $botProtection['reason']];
+        }
+    }
+
+    return (object) $blocked;
+}
+
+/**
+ * Дополняет результат проверки ресурсов PHP-ошибками и mixed content каждой проверенной страницы (заглушки защиты
+ * от ботов пропускаются). Одна и та же ошибка на нескольких страницах — одна находка со списком страниц.
+ *
+ * @param array<string, mixed> $result  результат `runResourceCheck()`
+ * @param array<string, mixed> $context контекст шага
  * @return array<string, mixed>
  */
-function addPageErrorFindings(array $result, array $home): array
+function addPageErrorFindings(array $result, array $context): array
 {
     if ($result['status'] !== STEP_STATUS_DONE) {
         return $result;
     }
 
-    $pageUrl = (string) $result['facts']['page_url'];
-    $pageId = isset($home['page_id']) ? (int) $home['page_id'] : null;
-    $resources = $result['facts']['resources'];
+    $phpErrors = [];
+    $mixedContent = [];
+    foreach (collectResourcePages($context) as $page) {
+        if ($page['bot_protection'] !== null) {
+            continue;
+        }
 
-    $phpErrors = findPhpErrors((string) ($home['body'] ?? ''), $pageUrl, $pageId);
-    $mixedContent = findMixedContent($pageUrl, $resources, $pageId);
+        $pageResources = array_values(array_filter(
+            $result['facts']['resources'],
+            static fn (array $resource): bool => in_array($page['url'], $resource['pages'] ?? [], true)
+        ));
+        foreach (findPhpErrors($page['body'], $page['url'], $page['page_id']) as $finding) {
+            $phpErrors[] = ['finding' => $finding, 'page_url' => $page['url']];
+        }
+        foreach (findMixedContent($page['url'], $pageResources, $page['page_id']) as $finding) {
+            $mixedContent[] = ['finding' => $finding, 'page_url' => $page['url']];
+        }
+    }
+
+    $phpErrors = mergePageFindings($phpErrors);
+    $mixedContent = mergePageFindings($mixedContent);
     $broken = count($result['findings']);
+    $pages = $result['facts']['pages'];
+    $blocked = count(array_filter($pages, static fn (array $page): bool => !$page['checked']));
 
     $result['findings'] = [...$result['findings'], ...$phpErrors, ...$mixedContent];
-    $result['message'] = buildResourcesStepMessage(count($resources), $broken, count($phpErrors), count($mixedContent));
+    $result['message'] = buildResourcesStepMessage(
+        count($pages) - $blocked,
+        $blocked,
+        count($result['facts']['resources']),
+        $broken,
+        count($phpErrors),
+        count($mixedContent)
+    );
 
     return $result;
+}
+
+/**
+ * Одинаковые находки с разных страниц — одна: первая (её `page_id` и адрес), все страницы — в `evidence.pages`.
+ *
+ * @param list<array{finding: array, page_url: string}> $items в порядке страниц
+ * @return list<array>
+ */
+function mergePageFindings(array $items): array
+{
+    $merged = [];
+    foreach ($items as $item) {
+        $key = buildPageFindingMergeKey($item['finding']);
+        if (!isset($merged[$key])) {
+            $merged[$key] = $item['finding'];
+            $merged[$key]['evidence'] = ($merged[$key]['evidence'] ?? []) + ['pages' => []];
+        }
+        if (!in_array($item['page_url'], $merged[$key]['evidence']['pages'], true)) {
+            $merged[$key]['evidence']['pages'][] = $item['page_url'];
+        }
+    }
+
+    return array_values($merged);
+}
+
+/**
+ * PHP-ошибка — по типу, файлу и строке (адрес страницы входит в её fingerprint); остальное — по fingerprint.
+ */
+function buildPageFindingMergeKey(array $finding): string
+{
+    if ($finding['category'] === 'php_error') {
+        $evidence = $finding['evidence'] ?? [];
+
+        return implode('|', [
+            'php_error',
+            strtolower((string) ($evidence['type'] ?? '')),
+            (string) ($evidence['file'] ?? ''),
+            (string) ($evidence['line'] ?? ''),
+        ]);
+    }
+
+    return (string) $finding['fingerprint'];
 }
 
 /**

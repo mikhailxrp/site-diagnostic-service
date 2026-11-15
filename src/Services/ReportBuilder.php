@@ -108,6 +108,17 @@ const REPORT_PAGE_NOT_FOUND_LABEL  = 'не найдена';
 const REPORT_PAGE_NOT_FOUND_REASON = 'страница не найдена';
 const REPORT_PAGE_NO_RESPONSE      = 'нет ответа';
 
+/** Страница-заглушка защиты от ботов (`checked_pages.blocked`) */
+const REPORT_PAGE_BLOCKED_LABEL    = 'не удалось проверить';
+const REPORT_PAGE_BLOCKED_TITLE    = 'защита от ботов';
+const REPORT_PAGE_BLOCKED_REASON   = 'Вместо страницы ответила заглушка защиты от ботов (%s): ресурсы и ошибки не проверены.';
+const REPORT_PAGE_BLOCKED_DETAIL   = ' Признак: %s.';
+const REPORT_BADGE_BLOCKED         = 'bg-orange-lt';
+
+/** Группа «По страницам» для находок без страницы (SSL, стек и т. п.) */
+const REPORT_NO_PAGE_GROUP_TITLE = 'Сайт целиком';
+const REPORT_PAGE_TYPES_SEPARATOR = ', ';
+
 /** Варианты адреса из шага `availability` (ключи — AVAILABILITY_VARIANT_*) */
 const REPORT_VARIANT_LABELS = [
     'http'      => 'http://',
@@ -137,24 +148,29 @@ const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNES
  * @param list<array<string, mixed>> $stackItems из getStackItemsByDiagnostic()
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
  * @return array{partial: bool, productUrl: ?string, summary: ?array, pages: list<array>, findingCount: int,
- *               findingGroups: list<array>, stackGroups: list<array>, uncheckedSteps: list<array>}
+ *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
+ *               stackGroups: list<array>, uncheckedSteps: list<array>}
  */
 function buildReport(array $diagnostic, array $findings, array $stackItems, array $pages): array
 {
     $partial = in_array((string) $diagnostic['status'], REPORT_PARTIAL_STATUSES, true);
     $summary = decodeReportSummary($diagnostic['summary_json'] ?? null);
+    $blocked = buildBlockedPageReasons($pages, $summary['blocked'] ?? null);
+    $pageUrls = buildPageUrlMap($pages);
 
     return [
-        'partial'        => $partial,
-        'productUrl'     => isset($diagnostic['product_url']) && $diagnostic['product_url'] !== ''
+        'partial'           => $partial,
+        'productUrl'        => isset($diagnostic['product_url']) && $diagnostic['product_url'] !== ''
             ? (string) $diagnostic['product_url']
             : null,
-        'summary'        => buildReportSummary($summary),
-        'pages'          => buildReportPages($pages, $summary['pages'] ?? null),
-        'findingCount'   => count($findings),
-        'findingGroups'  => buildReportFindingGroups($findings, buildPageUrlMap($pages)),
-        'stackGroups'    => buildReportStackGroups($stackItems),
-        'uncheckedSteps' => buildReportUncheckedSteps($diagnostic['steps'] ?? [], $partial),
+        'summary'           => buildReportSummary($summary, findHomeBlockedReason($pages, $blocked)),
+        'pages'             => buildReportPages($pages, $summary['pages'] ?? null, $blocked),
+        'findingCount'      => count($findings),
+        'findingGroups'     => buildReportFindingGroups($findings, $pageUrls),
+        'findingPageGroups' => buildReportFindingsByPage($findings, $pages, $blocked),
+        'blockedBadge'      => ['label' => REPORT_PAGE_BLOCKED_LABEL, 'badgeClass' => REPORT_BADGE_BLOCKED],
+        'stackGroups'       => buildReportStackGroups($stackItems),
+        'uncheckedSteps'    => buildReportUncheckedSteps($diagnostic['steps'] ?? [], $partial),
     ];
 }
 
@@ -182,9 +198,10 @@ function decodeReportSummary(mixed $summaryJson): ?array
  * null — сводки нет (шаг доступности не дошёл до записи).
  *
  * @param array<string, mixed>|null $summary
+ * @param string|null               $homeBlocked причина, если главная — заглушка защиты от ботов
  * @return array{rows: list<array>, variants: list<array>, redirects: list<array>, warnings: list<string>}|null
  */
-function buildReportSummary(?array $summary): ?array
+function buildReportSummary(?array $summary, ?string $homeBlocked = null): ?array
 {
     $availability = $summary['availability'] ?? null;
     if (!is_array($availability) || !is_array($availability['home'] ?? null)) {
@@ -216,7 +233,9 @@ function buildReportSummary(?array $summary): ?array
     ];
 
     $warnings = [];
-    if (!empty($home['possible_bot_protection'])) {
+    if ($homeBlocked !== null) {
+        $warnings[] = 'Главная: ' . $homeBlocked;
+    } elseif (!empty($home['possible_bot_protection'])) {
         $warnings[] = 'Возможна защита от ботов (ответ ' . ($home['status'] ?? '—')
             . '): часть проверок могла увидеть не настоящую страницу.';
     }
@@ -371,10 +390,11 @@ function buildReportRedirects(array $redirects): array
  *
  * @param list<array<string, mixed>> $pages      строки `checked_pages`
  * @param mixed                      $crawlFacts `summary_json.pages`: `missing` — тип → причина
+ * @param array<int, string>         $blocked    id страницы → причина «не удалось проверить» (`buildBlockedPageReasons()`)
  * @return list<array{type: string, label: string, found: bool, url: ?string, status: string, badgeClass: string,
- *                    foundBy: ?string, responseMs: ?int, reason: ?string}>
+ *                    foundBy: ?string, responseMs: ?int, reason: ?string, blocked: ?string}>
  */
-function buildReportPages(array $pages, mixed $crawlFacts): array
+function buildReportPages(array $pages, mixed $crawlFacts, array $blocked = []): array
 {
     $byType = [];
     foreach ($pages as $page) {
@@ -402,6 +422,7 @@ function buildReportPages(array $pages, mixed $crawlFacts): array
                 'foundBy'    => REPORT_FOUND_BY_LABELS[$foundBy] ?? $foundBy,
                 'responseMs' => isset($page['response_ms']) ? (int) $page['response_ms'] : null,
                 'reason'     => null,
+                'blocked'    => isset($page['id']) ? ($blocked[(int) $page['id']] ?? null) : null,
             ];
             continue;
         }
@@ -420,6 +441,7 @@ function buildReportPages(array $pages, mixed $crawlFacts): array
             'foundBy'    => null,
             'responseMs' => null,
             'reason'     => is_string($missing[$type] ?? null) ? $missing[$type] : REPORT_PAGE_NOT_FOUND_REASON,
+            'blocked'    => null,
         ];
     }
 
@@ -480,7 +502,7 @@ function buildReportFindingGroups(array $findings, array $pageUrls): array
  * @param array<string, mixed> $finding
  * @param array<int, string>   $pageUrls
  * @return array{title: string, severityLabel: string, badgeClass: string, categoryLabel: string,
- *               location: ?string, pageUrl: ?string, details: ?string, evidenceJson: ?string}
+ *               location: ?string, pageUrl: ?string, pageUrls: list<string>, details: ?string, evidenceJson: ?string}
  */
 function buildReportFinding(array $finding, array $pageUrls): array
 {
@@ -488,8 +510,10 @@ function buildReportFinding(array $finding, array $pageUrls): array
     $category = (string) $finding['category'];
     $location = isset($finding['location']) && $finding['location'] !== '' ? (string) $finding['location'] : null;
 
-    $pageId  = isset($finding['page_id']) ? (int) $finding['page_id'] : null;
-    $pageUrl = $pageId !== null ? ($pageUrls[$pageId] ?? null) : null;
+    // Найдено на нескольких страницах — список вместо одной строки «Страница:»
+    $findingPages = getFindingPageUrls($finding, $pageUrls);
+    $manyPages = count($findingPages) > 1;
+    $pageUrl = !$manyPages ? ($findingPages[0] ?? null) : null;
 
     $details  = isset($finding['details']) && $finding['details'] !== '' ? (string) $finding['details'] : null;
     $evidence = $finding['evidence'] ?? null;
@@ -503,9 +527,151 @@ function buildReportFinding(array $finding, array $pageUrls): array
         'location'      => $location,
         // Страница не повторяется, если находка и есть сама страница (например, «главная не отвечает»)
         'pageUrl'       => $pageUrl !== null && $pageUrl !== $location ? $pageUrl : null,
+        'pageUrls'      => $manyPages ? $findingPages : [],
         'details'       => $details,
         'evidenceJson'  => $evidenceJson !== false ? $evidenceJson : null,
     ];
+}
+
+/**
+ * Адреса страниц находки: `evidence.pages` (находка с нескольких страниц, таск 4), иначе страница по `page_id`.
+ *
+ * @param array<string, mixed> $finding
+ * @param array<int, string>   $pageUrls id страницы → адрес
+ * @return list<string>
+ */
+function getFindingPageUrls(array $finding, array $pageUrls): array
+{
+    $evidencePages = is_array($finding['evidence'] ?? null) ? ($finding['evidence']['pages'] ?? null) : null;
+    if (is_array($evidencePages)) {
+        $urls = array_values(array_unique(array_filter($evidencePages, 'is_string')));
+        if ($urls !== []) {
+            return $urls;
+        }
+    }
+
+    $pageId = isset($finding['page_id']) ? (int) $finding['page_id'] : null;
+
+    return $pageId !== null && isset($pageUrls[$pageId]) ? [$pageUrls[$pageId]] : [];
+}
+
+/**
+ * Причины «не удалось проверить» по страницам с `blocked = 1`: защита и признак из `summary_json.blocked`
+ * (у старых записей без сводки — общая формулировка).
+ *
+ * @param list<array<string, mixed>> $pages
+ * @param mixed                      $blockedSummary `summary_json.blocked`: id страницы → {title, reason}
+ * @return array<int, string> id страницы → причина
+ */
+function buildBlockedPageReasons(array $pages, mixed $blockedSummary): array
+{
+    $summary = is_array($blockedSummary) ? $blockedSummary : [];
+    $reasons = [];
+    foreach ($pages as $page) {
+        if (empty($page['blocked']) || !isset($page['id'])) {
+            continue;
+        }
+
+        $id = (int) $page['id'];
+        $info = is_array($summary[$id] ?? null) ? $summary[$id] : [];
+        $title = is_string($info['title'] ?? null) && $info['title'] !== '' ? $info['title'] : REPORT_PAGE_BLOCKED_TITLE;
+        $reason = sprintf(REPORT_PAGE_BLOCKED_REASON, $title);
+        if (is_string($info['reason'] ?? null) && $info['reason'] !== '') {
+            $reason .= sprintf(REPORT_PAGE_BLOCKED_DETAIL, $info['reason']);
+        }
+        $reasons[$id] = $reason;
+    }
+
+    return $reasons;
+}
+
+/**
+ * @param list<array<string, mixed>> $pages
+ * @param array<int, string>         $blocked
+ */
+function findHomeBlockedReason(array $pages, array $blocked): ?string
+{
+    foreach ($pages as $page) {
+        if (($page['page_type'] ?? null) === 'home' && isset($page['id'])) {
+            return $blocked[(int) $page['id']] ?? null;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Находки по страницам: группа на каждый адрес из `checked_pages` (типы — в порядке REPORT_PAGE_TYPE_LABELS,
+ * корзина и оформление с одним адресом — одна группа), находка с нескольких страниц — в каждой группе;
+ * находки без страницы — в группе «Сайт целиком» (если есть). Внутри группы — от критичных к информации.
+ *
+ * @param list<array<string, mixed>> $findings отсортированы по серьёзности (getFindingsByDiagnostic())
+ * @param list<array<string, mixed>> $pages
+ * @param array<int, string>         $blocked  id страницы → причина «не удалось проверить»
+ * @return list<array{title: string, url: ?string, blocked: ?string, count: int, items: list<array>}>
+ */
+function buildReportFindingsByPage(array $findings, array $pages, array $blocked = []): array
+{
+    $typeOrder = array_flip(array_keys(REPORT_PAGE_TYPE_LABELS));
+    usort(
+        $pages,
+        static fn (array $a, array $b): int => [$typeOrder[$a['page_type'] ?? ''] ?? PHP_INT_MAX, (int) ($a['id'] ?? 0)]
+            <=> [$typeOrder[$b['page_type'] ?? ''] ?? PHP_INT_MAX, (int) ($b['id'] ?? 0)]
+    );
+
+    $groups = [];
+    foreach ($pages as $page) {
+        $url = (string) $page['url'];
+        $type = (string) ($page['page_type'] ?? '');
+        $label = REPORT_PAGE_TYPE_LABELS[$type] ?? null;
+        $reason = isset($page['id']) ? ($blocked[(int) $page['id']] ?? null) : null;
+
+        if (!isset($groups[$url])) {
+            $groups[$url] = ['labels' => [], 'url' => $url, 'blocked' => null, 'items' => []];
+        }
+        if ($label !== null && !in_array($label, $groups[$url]['labels'], true)) {
+            $groups[$url]['labels'][] = $label;
+        }
+        $groups[$url]['blocked'] ??= $reason;
+    }
+
+    $pageUrls = buildPageUrlMap($pages);
+    $noPage = [];
+    foreach ($findings as $finding) {
+        $item = buildReportFinding($finding, $pageUrls);
+        $placed = false;
+        foreach (getFindingPageUrls($finding, $pageUrls) as $url) {
+            if (isset($groups[$url])) {
+                $groups[$url]['items'][] = $item;
+                $placed = true;
+            }
+        }
+        if (!$placed) {
+            $noPage[] = $item;
+        }
+    }
+
+    $result = [];
+    foreach ($groups as $group) {
+        $result[] = [
+            'title'   => $group['labels'] !== [] ? implode(REPORT_PAGE_TYPES_SEPARATOR, $group['labels']) : $group['url'],
+            'url'     => $group['url'],
+            'blocked' => $group['blocked'],
+            'count'   => count($group['items']),
+            'items'   => $group['items'],
+        ];
+    }
+    if ($noPage !== []) {
+        $result[] = [
+            'title'   => REPORT_NO_PAGE_GROUP_TITLE,
+            'url'     => null,
+            'blocked' => null,
+            'count'   => count($noPage),
+            'items'   => $noPage,
+        ];
+    }
+
+    return $result;
 }
 
 /**

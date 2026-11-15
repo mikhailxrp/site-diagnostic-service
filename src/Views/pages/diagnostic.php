@@ -205,7 +205,12 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                                 <li class="list-group-item">
                                                     <div class="row align-items-center g-2">
                                                         <div class="col">
-                                                            <div class="fw-medium"><?= e($page['label']) ?></div>
+                                                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                                                <span class="fw-medium"><?= e($page['label']) ?></span>
+                                                                <?php if ($page['blocked'] !== null) : ?>
+                                                                    <span class="badge <?= e($report['blockedBadge']['badgeClass']) ?>"><?= e($report['blockedBadge']['label']) ?></span>
+                                                                <?php endif; ?>
+                                                            </div>
                                                             <?php if ($page['found']) : ?>
                                                                 <div class="small text-break"><?= e($page['url']) ?></div>
                                                                 <div class="text-secondary small">
@@ -214,6 +219,9 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                                                         · <?= e($page['responseMs']) ?> мс
                                                                     <?php endif; ?>
                                                                 </div>
+                                                                <?php if ($page['blocked'] !== null) : ?>
+                                                                    <div class="text-secondary small text-break"><?= e($page['blocked']) ?></div>
+                                                                <?php endif; ?>
                                                             <?php else : ?>
                                                                 <div class="text-secondary small text-break"><?= e($page['reason']) ?></div>
                                                             <?php endif; ?>
@@ -247,17 +255,61 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                             </div>
                                         </div>
                                     <?php else : ?>
-                                        <?php foreach ($report['findingGroups'] as $findingGroup) : ?>
-                                            <ul class="list-group list-group-flush">
-                                                <li class="list-group-header d-flex align-items-center gap-2" role="heading" aria-level="3">
-                                                    <?= e($findingGroup['label']) ?>
-                                                    <span class="badge <?= e($findingGroup['badgeClass']) ?>"><?= e($findingGroup['count']) ?></span>
+                                        <div class="card-header">
+                                            <ul class="nav nav-tabs card-header-tabs" data-bs-toggle="tabs" role="tablist">
+                                                <li class="nav-item" role="presentation">
+                                                    <a href="#findings-by-severity" class="nav-link py-3 active" data-bs-toggle="tab"
+                                                       role="tab" aria-controls="findings-by-severity" aria-selected="true">По серьёзности</a>
                                                 </li>
-                                                <?php foreach ($findingGroup['items'] as $finding) : ?>
-                                                    <?php render('components/finding', ['finding' => $finding]); ?>
-                                                <?php endforeach; ?>
+                                                <li class="nav-item" role="presentation">
+                                                    <a href="#findings-by-page" class="nav-link py-3" data-bs-toggle="tab"
+                                                       role="tab" aria-controls="findings-by-page" aria-selected="false" tabindex="-1">По страницам</a>
+                                                </li>
                                             </ul>
-                                        <?php endforeach; ?>
+                                        </div>
+                                        <div class="tab-content">
+                                            <div class="tab-pane active show" id="findings-by-severity" role="tabpanel">
+                                                <?php foreach ($report['findingGroups'] as $findingGroup) : ?>
+                                                    <ul class="list-group list-group-flush">
+                                                        <li class="list-group-header d-flex align-items-center gap-2" role="heading" aria-level="3">
+                                                            <?= e($findingGroup['label']) ?>
+                                                            <span class="badge <?= e($findingGroup['badgeClass']) ?>"><?= e($findingGroup['count']) ?></span>
+                                                        </li>
+                                                        <?php foreach ($findingGroup['items'] as $finding) : ?>
+                                                            <?php render('components/finding', ['finding' => $finding]); ?>
+                                                        <?php endforeach; ?>
+                                                    </ul>
+                                                <?php endforeach; ?>
+                                            </div>
+                                            <div class="tab-pane" id="findings-by-page" role="tabpanel">
+                                                <?php foreach ($report['findingPageGroups'] as $pageGroup) : ?>
+                                                    <ul class="list-group list-group-flush">
+                                                        <li class="list-group-header d-flex flex-wrap align-items-center gap-2" role="heading" aria-level="3">
+                                                            <?= e($pageGroup['title']) ?>
+                                                            <span class="badge bg-secondary-lt"><?= e($pageGroup['count']) ?></span>
+                                                            <?php if ($pageGroup['blocked'] !== null) : ?>
+                                                                <span class="badge <?= e($report['blockedBadge']['badgeClass']) ?>"><?= e($report['blockedBadge']['label']) ?></span>
+                                                            <?php endif; ?>
+                                                        </li>
+                                                        <?php if ($pageGroup['url'] !== null || $pageGroup['blocked'] !== null || $pageGroup['items'] === []) : ?>
+                                                            <li class="list-group-item small text-secondary text-break">
+                                                                <?php if ($pageGroup['url'] !== null) : ?>
+                                                                    <div><?= e($pageGroup['url']) ?></div>
+                                                                <?php endif; ?>
+                                                                <?php if ($pageGroup['blocked'] !== null) : ?>
+                                                                    <div><?= e($pageGroup['blocked']) ?></div>
+                                                                <?php elseif ($pageGroup['items'] === []) : ?>
+                                                                    <div>Находок нет</div>
+                                                                <?php endif; ?>
+                                                            </li>
+                                                        <?php endif; ?>
+                                                        <?php foreach ($pageGroup['items'] as $finding) : ?>
+                                                            <?php render('components/finding', ['finding' => $finding]); ?>
+                                                        <?php endforeach; ?>
+                                                    </ul>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </div>
                                     <?php endif; ?>
                                 </section>
                             </div>

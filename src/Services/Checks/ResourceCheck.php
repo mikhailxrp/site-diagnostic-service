@@ -3,8 +3,9 @@
 declare(strict_types=1);
 
 /**
- * Шаг `resources` без БД: ресурсы главной (скрипты, стили, картинки, шрифты, иконки, фреймы) и `url()` из
- * inline CSS и из скачанных CSS проверяются запросами; каждый битый ресурс — находка `broken_resource`.
+ * Шаг `resources` без БД: ресурсы главной и найденных страниц магазина (скрипты, стили, картинки, шрифты, иконки,
+ * фреймы) и `url()` из inline CSS и из скачанных CSS проверяются запросами, каждый адрес — один раз; каждый битый
+ * ресурс — одна находка `broken_resource` со списком страниц.
  * Сеть передаётся параметром (`$request`). PHP-ошибки и mixed content — `PhpErrorCheck.php`,
  * `MixedContentCheck.php`, их собирает шаг в `DiagnosticRunner.php`.
  */
@@ -52,6 +53,10 @@ const RESOURCE_CSS_MAX_DEPTH = 1; // CSS страницы — 0, его @import 
 const RESOURCE_PROGRESS_EVERY = 10; // раз в столько проверенных ресурсов — `onProgress` (heartbeat воркера)
 
 /**
+ * Ресурсы всех проверяемых страниц (`collectResourcePages()`) с общим кэшем: адрес, подключённый на нескольких
+ * страницах (или в общем CSS), запрашивается один раз. Битый ресурс — одна находка: `page_id` — первая страница,
+ * все страницы — `evidence.pages`. Заглушки защиты от ботов (`bot_protection`) не проверяются.
+ *
  * @param array<string, mixed>                         $context    контекст шага (`buildStepContext()`)
  * @param callable(string $url, string $method): array $request    результат как у `httpRequest()`
  * @param callable(int $checked): void|null            $onProgress вызывается каждые RESOURCE_PROGRESS_EVERY ресурсов
@@ -64,62 +69,185 @@ function runResourceCheck(array $context, callable $request, ?callable $onProgre
         return ['status' => 'skipped', 'message' => RESOURCES_NO_HOME_MESSAGE, 'facts' => [], 'findings' => []];
     }
 
-    $pageUrl = (string) ($home['final_url'] ?? $context['diagnostic']['url']);
-    $pageId = isset($home['page_id']) ? (int) $home['page_id'] : null;
-    $parsed = parseHtml((string) ($home['body'] ?? ''), $pageUrl);
+    $pages = collectResourcePages($context);
+    // адрес → ['resource' => …, 'checked' => ?array, 'pages' => [индекс страницы => true], 'parents' => [адрес CSS => true]]
+    $entries = [];
+    $checkedCount = 0;
 
-    // Очередь пополняется по ходу: в скачанных CSS находятся шрифты, картинки и @import
-    $queue = collectPageResources($parsed, $pageUrl);
-    $seen = array_fill_keys(array_column($queue, 'url'), true);
-    $resources = [];
-    $findings = [];
+    foreach ($pages as $index => $page) {
+        if ($page['bot_protection'] !== null) {
+            continue;
+        }
 
-    for ($i = 0; $i < count($queue); $i++) {
-        $resource = $queue[$i];
-        $isStyle = $resource['type'] === RESOURCE_TYPE_STYLE;
-        $checked = checkResource($resource['url'], $isStyle, $request);
+        // Очередь пополняется по ходу: в скачанных CSS находятся шрифты, картинки и @import
+        $queue = [];
+        foreach (collectPageResources(parseHtml($page['body'], $page['url']), $page['url']) as $resource) {
+            if (!isset($entries[$resource['url']])) {
+                $entries[$resource['url']] = ['resource' => $resource, 'checked' => null, 'pages' => [], 'parents' => []];
+                $queue[] = $resource['url'];
+            }
+            $entries[$resource['url']]['pages'][$index] = true;
+        }
 
-        if ($isStyle && $resource['css_depth'] <= RESOURCE_CSS_MAX_DEPTH && $checked['status'] === RESOURCE_OK_STATUS) {
-            $cssUrl = $checked['final_url'] ?? $resource['url'];
-            foreach (extractCssResources($checked['body'], $cssUrl, $resource['url'], $resource['css_depth'] + 1) as $nested) {
-                if (!isset($seen[$nested['url']])) {
-                    $seen[$nested['url']] = true;
-                    $queue[] = $nested;
+        for ($i = 0; $i < count($queue); $i++) {
+            $resource = $entries[$queue[$i]]['resource'];
+            $isStyle = $resource['type'] === RESOURCE_TYPE_STYLE;
+            $checked = checkResource($resource['url'], $isStyle, $request);
+            $entries[$resource['url']]['checked'] = $checked;
+            $checkedCount++;
+
+            if ($isStyle && $resource['css_depth'] <= RESOURCE_CSS_MAX_DEPTH && $checked['status'] === RESOURCE_OK_STATUS) {
+                $cssUrl = $checked['final_url'] ?? $resource['url'];
+                foreach (extractCssResources($checked['body'], $cssUrl, $resource['url'], $resource['css_depth'] + 1) as $nested) {
+                    if (!isset($entries[$nested['url']])) {
+                        $entries[$nested['url']] = ['resource' => $nested, 'checked' => null, 'pages' => [], 'parents' => []];
+                        $queue[] = $nested['url'];
+                    }
+                    $entries[$nested['url']]['parents'][$resource['url']] = true;
                 }
             }
-        }
 
-        $fact = [
-            'url'      => $resource['url'],
-            'type'     => $resource['type'],
-            'found_in' => $resource['found_in'],
-            'fallback' => $resource['fallback'],
-            'method'   => $checked['method'],
-            'status'   => $checked['status'],
-            'time_ms'  => $checked['time_ms'],
-            'error'    => $checked['error'],
-        ];
-        $resources[] = $fact;
-
-        if (isBrokenResource($fact)) {
-            $findings[] = makeBrokenResourceFinding($fact, $pageId);
-        }
-
-        if ($onProgress !== null && count($resources) % RESOURCE_PROGRESS_EVERY === 0) {
-            $onProgress(count($resources));
+            if ($onProgress !== null && $checkedCount % RESOURCE_PROGRESS_EVERY === 0) {
+                $onProgress($checkedCount);
+            }
         }
     }
 
+    $resources = [];
+    $findings = [];
+    foreach ($entries as $url => $entry) {
+        $pageIndexes = resolveResourcePageIndexes((string) $url, $entries);
+        $fact = makeResourceFact($entry['resource'], $entry['checked'], array_map(
+            static fn (int $index): string => $pages[$index]['url'],
+            $pageIndexes
+        ));
+        $resources[] = $fact;
+
+        if (isBrokenResource($fact)) {
+            $findings[] = makeBrokenResourceFinding($fact, $pages[$pageIndexes[0] ?? 0]['page_id'] ?? null);
+        }
+    }
+
+    $pageFacts = array_map(
+        static fn (array $page): array => [
+            'url'            => $page['url'],
+            'types'          => $page['types'],
+            'page_id'        => $page['page_id'],
+            'checked'        => $page['bot_protection'] === null,
+            'bot_protection' => $page['bot_protection'],
+        ],
+        $pages
+    );
+    $blocked = count(array_filter($pageFacts, static fn (array $page): bool => !$page['checked']));
+
     return [
         'status'   => 'done',
-        'message'  => buildResourcesStepMessage(count($resources), count($findings), 0, 0),
+        'message'  => buildResourcesStepMessage(count($pages) - $blocked, $blocked, count($resources), count($findings), 0, 0),
         'facts'    => [
-            'page_url'  => $pageUrl,
+            'pages'     => $pageFacts,
             'resources' => $resources,
-            // Страница-заглушка защиты от ботов или обрезанный HTML — проверены не все ресурсы
-            'limited'   => !empty($home['possible_bot_protection']) || !empty($home['truncated']),
+            // Возможная защита от ботов на главной или обрезанный HTML — проверены не все ресурсы
+            'limited'   => !empty($home['possible_bot_protection'])
+                || in_array(true, array_column($pages, 'truncated'), true),
         ],
         'findings' => $findings,
+    ];
+}
+
+/**
+ * Страницы для проверки: главная из шага `availability`, затем найденные шагом `crawl` (категория, товар,
+ * корзина, оформление). Страница без ответа пропускается; одна страница под несколькими типами (корзина =
+ * оформление) — один раз, с перечнем типов.
+ *
+ * @param array<string, mixed> $context
+ * @return list<array{url: string, types: list<string>, page_id: ?int, body: string, truncated: bool,
+ *                    bot_protection: ?array}>
+ */
+function collectResourcePages(array $context): array
+{
+    $candidates = [];
+    $home = $context['facts']['availability']['home'] ?? null;
+    if (is_array($home)) {
+        $candidates['home'] = $home;
+    }
+    $crawlPages = $context['facts']['crawl']['pages'] ?? [];
+    foreach (is_array($crawlPages) ? $crawlPages : [] as $type => $page) {
+        if (is_array($page) && $type !== 'home') {
+            $candidates[(string) $type] = $page;
+        }
+    }
+
+    $pages = [];
+    $byUrl = [];
+    foreach ($candidates as $type => $page) {
+        if (($page['status'] ?? null) === null) {
+            continue;
+        }
+
+        $url = (string) (($page['final_url'] ?? '') !== '' ? $page['final_url'] : ($page['url'] ?? ''));
+        $key = normalizeFindingLocation($url);
+        if (isset($byUrl[$key])) {
+            $pages[$byUrl[$key]]['types'][] = (string) $type;
+            continue;
+        }
+
+        $byUrl[$key] = count($pages);
+        $pages[] = [
+            'url'            => $url,
+            'types'          => [(string) $type],
+            'page_id'        => isset($page['page_id']) ? (int) $page['page_id'] : null,
+            'body'           => (string) ($page['body'] ?? ''),
+            'truncated'      => !empty($page['truncated']),
+            'bot_protection' => is_array($page['bot_protection'] ?? null) ? $page['bot_protection'] : null,
+        ];
+    }
+
+    return $pages;
+}
+
+/**
+ * Индексы страниц, где подключён ресурс: напрямую и через CSS, в котором он найден (по цепочке @import).
+ *
+ * @param array<string, array{pages: array<int, true>, parents: array<string, true>}> $entries
+ * @param array<string, true>                                                          $visited
+ * @return list<int> по возрастанию
+ */
+function resolveResourcePageIndexes(string $url, array $entries, array $visited = []): array
+{
+    if (isset($visited[$url]) || !isset($entries[$url])) {
+        return [];
+    }
+    $visited[$url] = true;
+
+    $indexes = array_keys($entries[$url]['pages']);
+    foreach (array_keys($entries[$url]['parents']) as $parent) {
+        $indexes = [...$indexes, ...resolveResourcePageIndexes((string) $parent, $entries, $visited)];
+    }
+
+    $indexes = array_values(array_unique($indexes));
+    sort($indexes);
+
+    return $indexes;
+}
+
+/**
+ * @param array{url: string, type: string, found_in: string, fallback: bool} $resource
+ * @param array<string, mixed>                                               $checked результат `checkResource()`
+ * @param list<string>                                                       $pageUrls
+ * @return array<string, mixed>
+ */
+function makeResourceFact(array $resource, array $checked, array $pageUrls): array
+{
+    return [
+        'url'      => $resource['url'],
+        'type'     => $resource['type'],
+        'found_in' => $resource['found_in'],
+        'fallback' => $resource['fallback'],
+        'method'   => $checked['method'],
+        'status'   => $checked['status'],
+        'time_ms'  => $checked['time_ms'],
+        'error'    => $checked['error'],
+        'pages'    => $pageUrls,
     ];
 }
 
@@ -315,7 +443,7 @@ function isBrokenResource(array $resource): bool
 
 /**
  * @param array{url: string, type: string, found_in: string, fallback: bool, method: string, status: ?int,
- *               error: ?string} $resource
+ *               error: ?string, pages?: list<string>} $resource
  */
 function makeBrokenResourceFinding(array $resource, ?int $pageId): array
 {
@@ -330,6 +458,11 @@ function makeBrokenResourceFinding(array $resource, ?int $pageId): array
     } else {
         $title = "Не загружается {$label}: код {$status}";
         $details = "Ресурс отвечает кодом {$status}. Где подключено: {$foundIn}.";
+    }
+
+    $pageCount = count($resource['pages'] ?? []);
+    if ($pageCount > 1) {
+        $details .= " Встречается на страницах: {$pageCount}.";
     }
 
     if ($resource['fallback']) {
@@ -350,6 +483,7 @@ function makeBrokenResourceFinding(array $resource, ?int $pageId): array
             'error'    => $resource['error'],
             'found_in' => $foundIn,
             'fallback' => $resource['fallback'],
+            'pages'    => $resource['pages'] ?? [],
         ],
         $pageId,
         $severity
@@ -357,9 +491,18 @@ function makeBrokenResourceFinding(array $resource, ?int $pageId): array
 }
 
 /**
- * «Проверено ресурсов: 48, битых: 3; PHP-ошибок: 0; mixed content: 2».
+ * «Проверено страниц: 3, не удалось: 1; ресурсов: 48, битых: 3; PHP-ошибок: 0; mixed content: 2»
+ * («не удалось» — только если были страницы-заглушки защиты от ботов).
  */
-function buildResourcesStepMessage(int $checked, int $broken, int $phpErrors, int $mixedContent): string
-{
-    return "Проверено ресурсов: {$checked}, битых: {$broken}; PHP-ошибок: {$phpErrors}; mixed content: {$mixedContent}";
+function buildResourcesStepMessage(
+    int $pages,
+    int $blocked,
+    int $checked,
+    int $broken,
+    int $phpErrors,
+    int $mixedContent
+): string {
+    $pagesPart = $blocked > 0 ? "Проверено страниц: {$pages}, не удалось: {$blocked}" : "Проверено страниц: {$pages}";
+
+    return "{$pagesPart}; ресурсов: {$checked}, битых: {$broken}; PHP-ошибок: {$phpErrors}; mixed content: {$mixedContent}";
 }

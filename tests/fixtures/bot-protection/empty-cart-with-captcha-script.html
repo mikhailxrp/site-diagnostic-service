@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>Корзина – магазин одежды</title>
+    <script src="https://smartcaptcha.yandexcloud.net/captcha.js" defer></script>
+</head>
+<body>
+<div class="order"></div>
+<main class="main" role="main">
+    <a href="/">←вернуться к покупкам</a>
+    <p>Ваша корзина пуста</p>
+</main>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const container = document.getElementById('smart-captcha');
+    if (!container) {
+        console.error('SmartCaptcha: элемент #smart-captcha не найден');
+        return;
+    }
+    smartCaptcha.render('smart-captcha', {sitekey: 'ysc1_test'});
+});
+</script>
+</body>
+</html>

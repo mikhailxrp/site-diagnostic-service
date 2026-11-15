@@ -282,4 +282,35 @@ final class DiagnosticRunnerTest extends TestCase
         ]);
         $this->assertSame('https://sudar.su/catalog/item/', $context['diagnostic']['product_url']);
     }
+
+    public function testBlockedPagesSummaryKeepsOnlyProtectedPages(): void
+    {
+        $summary = buildBlockedPagesSummary([
+            12 => ['provider' => 'cloudflare', 'title' => 'Cloudflare', 'reason' => 'заголовок cf-mitigated: challenge'],
+            13 => null,
+        ]);
+
+        $this->assertSame(
+            '{"12":{"title":"Cloudflare","reason":"заголовок cf-mitigated: challenge"}}',
+            json_encode($summary, JSON_UNESCAPED_UNICODE)
+        );
+        $this->assertSame('{}', json_encode(buildBlockedPagesSummary([5 => null])));
+    }
+
+    public function testDifferentFindingsAreNotMergedAcrossPages(): void
+    {
+        $first = makeFinding('mixed_content', 'A', 'http://shop.test/a.js', 'http', null, ['type' => 'script'], 1);
+        $second = makeFinding('mixed_content', 'B', 'http://shop.test/b.js', 'http', null, ['type' => 'script'], 2);
+
+        $merged = mergePageFindings([
+            ['finding' => $first, 'page_url' => 'https://shop.test/'],
+            ['finding' => $second, 'page_url' => 'https://shop.test/c/'],
+            ['finding' => $first, 'page_url' => 'https://shop.test/c/'],
+        ]);
+
+        $this->assertSame(['A', 'B'], array_column($merged, 'title'));
+        $this->assertSame(['https://shop.test/', 'https://shop.test/c/'], $merged[0]['evidence']['pages']);
+        $this->assertSame('script', $merged[0]['evidence']['type']);
+        $this->assertSame(1, $merged[0]['page_id']);
+    }
 }

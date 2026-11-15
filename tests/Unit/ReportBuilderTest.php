@@ -191,6 +191,112 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame([], buildReport($this->diagnostic(), [], [], [])['pages']);
     }
 
+    public function testBlockedPageIsMarkedWithProtectionName(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode([
+            'pages'   => ['missing' => []],
+            'blocked' => ['2' => ['title' => 'Cloudflare', 'reason' => 'заголовок cf-mitigated: challenge']],
+        ]);
+        $pages = [
+            ['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start',
+                'http_code' => 200, 'response_ms' => 120, 'blocked' => 0],
+            ['id' => 2, 'url' => 'https://shop.ru/item/', 'page_type' => 'product', 'found_by' => 'manual',
+                'http_code' => 403, 'response_ms' => 80, 'blocked' => 1],
+            ['id' => 3, 'url' => 'https://shop.ru/cat/', 'page_type' => 'category', 'found_by' => 'cms_pattern',
+                'http_code' => 503, 'response_ms' => 80, 'blocked' => 1],
+        ];
+
+        $report = buildReport($diagnostic, [], [], $pages);
+        $rows = array_column($report['pages'], null, 'type');
+
+        $this->assertNull($rows['home']['blocked']);
+        $this->assertStringContainsString('Cloudflare', (string) $rows['product']['blocked']);
+        $this->assertStringContainsString('cf-mitigated', (string) $rows['product']['blocked']);
+        // Старая запись без сводки — общая формулировка
+        $this->assertStringContainsString(REPORT_PAGE_BLOCKED_TITLE, (string) $rows['category']['blocked']);
+        $this->assertSame(REPORT_PAGE_BLOCKED_LABEL, $report['blockedBadge']['label']);
+    }
+
+    public function testHomeBlockedReplacesPossibleProtectionWarning(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode([
+            'availability' => ['home' => ['url' => self::HOME_URL, 'final_url' => self::HOME_URL, 'status' => 403,
+                'possible_bot_protection' => true, 'truncated' => false]],
+            'blocked'      => ['1' => ['title' => 'DDoS-Guard', 'reason' => 'x']],
+        ]);
+        $pages = [['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start',
+            'http_code' => 403, 'response_ms' => 120, 'blocked' => 1]];
+
+        $warnings = buildReport($diagnostic, [], [], $pages)['summary']['warnings'];
+
+        $this->assertCount(1, $warnings);
+        $this->assertStringContainsString('DDoS-Guard', $warnings[0]);
+    }
+
+    public function testFindingFromSeveralPagesListsThem(): void
+    {
+        $urls = [self::HOME_URL, 'https://shop.ru/cat/'];
+        $finding = $this->finding('medium', 'Битая картинка', [
+            'category' => 'broken_resource',
+            'location' => 'https://shop.ru/a.png',
+            'page_id'  => self::HOME_PAGE_ID,
+            'evidence' => ['status' => 404, 'pages' => $urls],
+        ]);
+        $single = $this->finding('medium', 'Одна страница', [
+            'location' => 'https://shop.ru/b.png',
+            'page_id'  => self::HOME_PAGE_ID,
+            'evidence' => ['status' => 404, 'pages' => [self::HOME_URL]],
+        ]);
+
+        $items = buildReport($this->diagnostic(), [$finding, $single], [], [$this->homePage()])['findingGroups'][0]['items'];
+
+        $this->assertSame($urls, $items[0]['pageUrls']);
+        $this->assertNull($items[0]['pageUrl']);
+        $this->assertSame([], $items[1]['pageUrls']);
+        $this->assertSame(self::HOME_URL, $items[1]['pageUrl']);
+    }
+
+    public function testFindingsAreGroupedByPage(): void
+    {
+        $pages = [
+            ['id' => 4, 'url' => 'https://shop.ru/cart/', 'page_type' => 'checkout', 'found_by' => 'cms_pattern', 'blocked' => 0],
+            ['id' => 3, 'url' => 'https://shop.ru/cart/', 'page_type' => 'cart', 'found_by' => 'cms_pattern', 'blocked' => 0],
+            ['id' => 2, 'url' => 'https://shop.ru/cat/', 'page_type' => 'category', 'found_by' => 'cms_pattern', 'blocked' => 1],
+            ['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start', 'blocked' => 0],
+        ];
+        $findings = [
+            $this->finding('high', 'На двух страницах', ['page_id' => 1,
+                'evidence' => ['pages' => [self::HOME_URL, 'https://shop.ru/cart/']]]),
+            $this->finding('medium', 'Только главная', ['page_id' => 1]),
+            $this->finding('low', 'SSL', ['category' => 'ssl']),
+            // Старая находка без evidence.pages — по page_id
+            $this->finding('low', 'Корзина', ['page_id' => 3, 'evidence' => ['status' => 404]]),
+        ];
+
+        $groups = buildReport($this->diagnostic(), $findings, [], $pages)['findingPageGroups'];
+
+        $this->assertSame(
+            ['Главная', 'Категория', 'Корзина, Оформление заказа', REPORT_NO_PAGE_GROUP_TITLE],
+            array_column($groups, 'title')
+        );
+        $this->assertSame(['На двух страницах', 'Только главная'], array_column($groups[0]['items'], 'title'));
+        $this->assertSame(0, $groups[1]['count']);
+        $this->assertNotNull($groups[1]['blocked']);
+        $this->assertSame(['На двух страницах', 'Корзина'], array_column($groups[2]['items'], 'title'));
+        $this->assertSame(['SSL'], array_column($groups[3]['items'], 'title'));
+        $this->assertNull($groups[3]['url']);
+    }
+
+    public function testNoPagesGivesOnlySiteWideGroup(): void
+    {
+        $groups = buildReport($this->diagnostic(), [$this->finding('high', 'Нет ответа')], [], [])['findingPageGroups'];
+
+        $this->assertSame([REPORT_NO_PAGE_GROUP_TITLE], array_column($groups, 'title'));
+        $this->assertSame([], buildReport($this->diagnostic(), [], [], [])['findingPageGroups']);
+    }
+
     public function testProductUrlIsShownOnlyWhenSet(): void
     {
         $diagnostic = $this->diagnostic();

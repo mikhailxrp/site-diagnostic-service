@@ -18,6 +18,14 @@ declare(strict_types=1);
     <?php if ($finding['pageUrl'] !== null) : ?>
         <div class="small text-break"><span class="text-secondary">Страница:</span> <?= e($finding['pageUrl']) ?></div>
     <?php endif; ?>
+    <?php if ($finding['pageUrls'] !== []) : ?>
+        <div class="small text-secondary">Страницы (<?= e(count($finding['pageUrls'])) ?>):</div>
+        <ul class="small mb-0 ps-3">
+            <?php foreach ($finding['pageUrls'] as $pageUrl) : ?>
+                <li class="text-break"><?= e($pageUrl) ?></li>
+            <?php endforeach; ?>
+        </ul>
+    <?php endif; ?>
     <?php if ($finding['details'] !== null) : ?>
         <p class="text-secondary mt-2 mb-0 text-break"><?= nl2br(e($finding['details']), false) ?></p>
     <?php endif; ?>
