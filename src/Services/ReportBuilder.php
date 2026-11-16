@@ -596,7 +596,8 @@ function buildReportFindingGroups(array $findings, array $pageUrls): array
  * @param array<string, mixed> $finding
  * @param array<int, string>   $pageUrls
  * @return array{title: string, severityLabel: string, badgeClass: string, categoryLabel: string,
- *               location: ?string, pageUrl: ?string, pageUrls: list<string>, details: ?string, evidenceJson: ?string}
+ *               location: ?string, line: ?string, widths: ?string, pageUrl: ?string, pageUrls: list<string>,
+ *               details: ?string, evidenceJson: ?string}
  */
 function buildReportFinding(array $finding, array $pageUrls): array
 {
@@ -619,12 +620,43 @@ function buildReportFinding(array $finding, array $pageUrls): array
         'badgeClass'    => REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL,
         'categoryLabel' => REPORT_FINDING_CATEGORY_LABELS[$category] ?? $category,
         'location'      => $location,
+        'line'          => $category === 'js_error' && is_array($evidence) ? formatReportFindingLine($evidence) : null,
+        'widths'        => is_array($evidence) ? formatReportFindingWidths($evidence['widths'] ?? null) : null,
         // Страница не повторяется, если находка и есть сама страница (например, «главная не отвечает»)
         'pageUrl'       => $pageUrl !== null && $pageUrl !== $location ? $pageUrl : null,
         'pageUrls'      => $manyPages ? $findingPages : [],
         'details'       => $details,
         'evidenceJson'  => $evidenceJson !== false ? $evidenceJson : null,
     ];
+}
+
+/**
+ * «строка 12, столбец 5» из `evidence` ошибки JS; без строки — null.
+ *
+ * @param array<string, mixed> $evidence
+ */
+function formatReportFindingLine(array $evidence): ?string
+{
+    $line = $evidence['line'] ?? null;
+    if (!is_int($line)) {
+        return null;
+    }
+    $column = $evidence['column'] ?? null;
+
+    return 'строка ' . $line . (is_int($column) ? ', столбец ' . $column : '');
+}
+
+/**
+ * «360, 768 px» из `evidence.widths` (находки из браузера); нет ширин — null.
+ */
+function formatReportFindingWidths(mixed $widths): ?string
+{
+    if (!is_array($widths)) {
+        return null;
+    }
+    $widths = array_values(array_filter($widths, 'is_int'));
+
+    return $widths !== [] ? implode(', ', $widths) . ' px' : null;
 }
 
 /**

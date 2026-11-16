@@ -235,6 +235,36 @@ final class ReportBuilderTest extends TestCase
         $this->assertStringContainsString('DDoS-Guard', $warnings[0]);
     }
 
+    public function testJsErrorShowsLineAndWidths(): void
+    {
+        $finding = $this->finding('medium', 'Ошибка JS: Uncaught TypeError', [
+            'category' => 'js_error',
+            'location' => 'https://shop.ru/js/app.js',
+            'page_id'  => self::HOME_PAGE_ID,
+            'evidence' => ['line' => 42, 'column' => 15, 'widths' => [360, 1366]],
+        ]);
+        $phpError = $this->finding('high', 'Fatal error', [
+            'category' => 'php_error',
+            'location' => self::HOME_URL,
+            'page_id'  => self::HOME_PAGE_ID,
+            'evidence' => ['line' => 7, 'file' => '/var/www/index.php'],
+        ]);
+
+        $report = buildReport($this->diagnostic(), [$finding, $phpError], [], [$this->homePage()]);
+        $items = [];
+        foreach ($report['findingGroups'] as $group) {
+            foreach ($group['items'] as $item) {
+                $items[$item['title']] = $item;
+            }
+        }
+
+        $this->assertSame('строка 42, столбец 15', $items['Ошибка JS: Uncaught TypeError']['line']);
+        $this->assertSame('360, 1366 px', $items['Ошибка JS: Uncaught TypeError']['widths']);
+        // Строка PHP-ошибки — внутри сервера, а «Где» у неё — страница: не подписывается
+        $this->assertNull($items['Fatal error']['line']);
+        $this->assertNull($items['Fatal error']['widths']);
+    }
+
     public function testFindingFromSeveralPagesListsThem(): void
     {
         $urls = [self::HOME_URL, 'https://shop.ru/cat/'];

@@ -1,0 +1,426 @@
+[
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "1",
+      "frameId": "F1",
+      "type": "Document",
+      "request": {
+        "url": "https://shop.test/",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "1",
+      "frameId": "F1",
+      "type": "Document",
+      "response": {
+        "url": "https://shop.test/",
+        "status": 404
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "2",
+      "frameId": "F2",
+      "type": "Document",
+      "request": {
+        "url": "https://shop.test/frame.html",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "2",
+      "frameId": "F2",
+      "type": "Document",
+      "response": {
+        "url": "https://shop.test/frame.html",
+        "status": 404
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "3",
+      "frameId": "F1",
+      "type": "Script",
+      "request": {
+        "url": "https://shop.test/js/missing.js",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "3",
+      "frameId": "F1",
+      "type": "Script",
+      "response": {
+        "url": "https://shop.test/js/missing.js",
+        "status": 404
+      }
+    }
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "requestId": "3",
+      "type": "Script",
+      "errorText": "net::ERR_HTTP_RESPONSE_CODE_FAILURE",
+      "canceled": false
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "4",
+      "frameId": "F1",
+      "type": "Fetch",
+      "request": {
+        "url": "https://shop.test/api/user",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "4",
+      "frameId": "F1",
+      "type": "Fetch",
+      "response": {
+        "url": "https://shop.test/api/user",
+        "status": 401
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "5",
+      "frameId": "F1",
+      "type": "XHR",
+      "request": {
+        "url": "https://shop.test/api/cart",
+        "method": "POST"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "5",
+      "frameId": "F1",
+      "type": "XHR",
+      "response": {
+        "url": "https://shop.test/api/cart",
+        "status": 500
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "6",
+      "frameId": "F1",
+      "type": "Fetch",
+      "request": {
+        "url": "https://shop.test/api/stock",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "6",
+      "frameId": "F1",
+      "type": "Fetch",
+      "response": {
+        "url": "https://shop.test/api/stock",
+        "status": 429
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "7",
+      "frameId": "F1",
+      "type": "Script",
+      "request": {
+        "url": "https://cdn.ads.test/ad.js",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "requestId": "7",
+      "type": "Script",
+      "errorText": "net::ERR_BLOCKED_BY_CLIENT",
+      "canceled": false
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "8",
+      "frameId": "F1",
+      "type": "Image",
+      "request": {
+        "url": "https://shop.test/img/slow.jpg",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "requestId": "8",
+      "type": "Image",
+      "errorText": "net::ERR_FAILED",
+      "canceled": true
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "9",
+      "frameId": "F1",
+      "type": "Image",
+      "request": {
+        "url": "http://shop.test/img/old.png",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "requestId": "9",
+      "type": "Image",
+      "errorText": "",
+      "canceled": false,
+      "blockedReason": "mixed-content"
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "10",
+      "frameId": "F1",
+      "type": "Image",
+      "request": {
+        "url": "https://mc.yandex.ru/watch/123",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "10",
+      "frameId": "F1",
+      "type": "Image",
+      "response": {
+        "url": "https://mc.yandex.ru/watch/123",
+        "status": 400
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "11",
+      "frameId": "F1",
+      "type": "Other",
+      "request": {
+        "url": "https://shop.test/favicon.ico",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "11",
+      "frameId": "F1",
+      "type": "Other",
+      "response": {
+        "url": "https://shop.test/favicon.ico",
+        "status": 404
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "12",
+      "frameId": "F1",
+      "type": "Image",
+      "request": {
+        "url": "data:image/png;base64,AAA",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "requestId": "12",
+      "type": "Image",
+      "errorText": "net::ERR_INVALID_URL",
+      "canceled": false
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "13",
+      "frameId": "F1",
+      "type": "Image",
+      "request": {
+        "url": "https://img.partner.test/logo.png",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "requestId": "13",
+      "type": "Image",
+      "errorText": "net::ERR_CONNECTION_REFUSED",
+      "canceled": false
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "14",
+      "frameId": "F1",
+      "type": "Ping",
+      "request": {
+        "url": "https://shop.test/ping",
+        "method": "POST"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "14",
+      "frameId": "F1",
+      "type": "Ping",
+      "response": {
+        "url": "https://shop.test/ping",
+        "status": 404
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "15",
+      "frameId": "F1",
+      "type": "Stylesheet",
+      "request": {
+        "url": "https://shop.test/css/broken.css",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "15",
+      "frameId": "F1",
+      "type": "Stylesheet",
+      "response": {
+        "url": "https://shop.test/css/broken.css",
+        "status": 404
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "16",
+      "frameId": "F1",
+      "type": "Script",
+      "request": {
+        "url": "https://shop.test/js/flaky.js",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "16",
+      "frameId": "F1",
+      "type": "Script",
+      "response": {
+        "url": "https://shop.test/js/flaky.js",
+        "status": 503
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "17",
+      "frameId": "F1",
+      "type": "Image",
+      "request": {
+        "url": "https://shop.test/img/ok.png",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "17",
+      "frameId": "F1",
+      "type": "Image",
+      "response": {
+        "url": "https://shop.test/img/ok.png",
+        "status": 200
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "18",
+      "frameId": "F1",
+      "type": "Script",
+      "request": {
+        "url": "https://shop.test/js/aborted.js",
+        "method": "GET"
+      }
+    }
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "requestId": "18",
+      "type": "Script",
+      "errorText": "net::ERR_ABORTED",
+      "canceled": false
+    }
+  }
+]

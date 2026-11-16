@@ -1,0 +1,107 @@
+[
+  {
+    "method": "Runtime.exceptionThrown",
+    "params": {
+      "timestamp": 1,
+      "exceptionDetails": {
+        "exceptionId": 1,
+        "text": "Uncaught",
+        "lineNumber": 41,
+        "columnNumber": 14,
+        "scriptId": "12",
+        "url": "https://shop.test/js/app.js",
+        "stackTrace": {
+          "callFrames": [
+            {
+              "functionName": "initCart",
+              "scriptId": "12",
+              "url": "https://shop.test/js/app.js",
+              "lineNumber": 41,
+              "columnNumber": 14
+            },
+            {
+              "functionName": "",
+              "scriptId": "12",
+              "url": "https://shop.test/js/app.js",
+              "lineNumber": 80,
+              "columnNumber": 2
+            }
+          ]
+        },
+        "exception": {
+          "type": "object",
+          "subtype": "error",
+          "className": "TypeError",
+          "description": "TypeError: Cannot read properties of undefined (reading 'foo')\n    at initCart (https://shop.test/js/app.js:42:15)"
+        }
+      }
+    }
+  },
+  {
+    "method": "Runtime.exceptionThrown",
+    "params": {
+      "timestamp": 2,
+      "exceptionDetails": {
+        "exceptionId": 2,
+        "text": "Script error.",
+        "lineNumber": 0,
+        "columnNumber": 0,
+        "scriptId": "0"
+      }
+    }
+  },
+  {
+    "method": "Runtime.exceptionThrown",
+    "params": {
+      "timestamp": 3,
+      "exceptionDetails": {
+        "exceptionId": 3,
+        "text": "Uncaught",
+        "lineNumber": 0,
+        "columnNumber": 1200,
+        "url": "https://mc.yandex.ru/metrika/tag.js",
+        "exception": {
+          "type": "object",
+          "subtype": "error",
+          "description": "ReferenceError: ym is not defined"
+        }
+      }
+    }
+  },
+  {
+    "method": "Runtime.exceptionThrown",
+    "params": {
+      "timestamp": 4,
+      "exceptionDetails": {
+        "exceptionId": 4,
+        "text": "Uncaught",
+        "lineNumber": 3,
+        "columnNumber": 7,
+        "url": "https://cdn.partner.test/widget.js",
+        "exception": {
+          "type": "object",
+          "subtype": "error",
+          "description": "Error: widget failed"
+        }
+      }
+    }
+  },
+  {
+    "method": "Runtime.exceptionThrown",
+    "params": {
+      "timestamp": 5,
+      "exceptionDetails": {
+        "exceptionId": 5,
+        "text": "Uncaught",
+        "lineNumber": 0,
+        "columnNumber": 0,
+        "url": "chrome-extension://abc/content.js",
+        "exception": {
+          "type": "object",
+          "subtype": "error",
+          "description": "Error: extension"
+        }
+      }
+    }
+  }
+]

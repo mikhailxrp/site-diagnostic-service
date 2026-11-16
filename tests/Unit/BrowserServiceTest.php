@@ -85,13 +85,39 @@ final class BrowserServiceTest extends TestCase
 
     public function testStepMessage(): void
     {
-        $opened = ['status' => BROWSER_PAGE_OPENED];
+        $home = ['url' => 'https://shop.test/', 'status' => BROWSER_PAGE_OPENED];
+        $catalog = ['url' => 'https://shop.test/catalog/', 'status' => BROWSER_PAGE_OPENED];
+        $cart = ['url' => 'https://shop.test/cart/', 'status' => BROWSER_PAGE_TIMEOUT];
 
-        $this->assertSame('Открыто в браузере: 2 из 2 страниц', buildBrowserStepMessage([$opened, $opened], 0));
         $this->assertSame(
-            'Открыто в браузере: 1 из 3 страниц; не открылось: 1; пропущено (защита от ботов): 1',
-            buildBrowserStepMessage([$opened, ['status' => BROWSER_PAGE_TIMEOUT]], 1)
+            'Открыто в браузере: 2 из 2 страниц (4 загрузок); ошибок JS: 3; упавших запросов: 1',
+            buildBrowserStepMessage([$home, $home, $catalog, $catalog], 0, 3, 1)
         );
+        // Каталог и корзина не открылись; плюс одна страница за защитой от ботов
+        $this->assertSame(
+            'Открыто в браузере: 1 из 4 страниц (1 из 3 загрузок); не открылось: 2; ошибок JS: 0; '
+                . 'упавших запросов: 0; пропущено (защита от ботов): 1',
+            buildBrowserStepMessage([$home, ['status' => BROWSER_PAGE_ERROR] + $catalog, $cart], 1)
+        );
+    }
+
+    public function testStepMessageCountsPageOpenedOnSomeWidths(): void
+    {
+        $opened = ['url' => 'https://shop.test/', 'status' => BROWSER_PAGE_OPENED];
+        $timeout = ['url' => 'https://shop.test/', 'status' => BROWSER_PAGE_TIMEOUT];
+
+        $this->assertStringStartsWith(
+            'Открыто в браузере: 1 из 1 страниц (2 из 3 загрузок); ошибок JS',
+            buildBrowserStepMessage([$opened, $timeout, $opened], 0)
+        );
+    }
+
+    public function testViewportOverride(): void
+    {
+        $this->assertSame(['width' => 360, 'height' => BROWSER_WINDOW_HEIGHT, 'deviceScaleFactor' => 1, 'mobile' => true], buildViewportOverride(360));
+        $this->assertFalse(buildViewportOverride(768)['mobile']);
+        $this->assertFalse(buildViewportOverride(1366)['mobile']);
+        $this->assertSame([360, 768, 1366], BROWSER_VIEWPORT_WIDTHS);
     }
 
     public function testCreateAndRemoveProfileDir(): void

@@ -13,7 +13,12 @@ declare(strict_types=1);
     </div>
     <h4 class="mb-1 text-break"><?= e($finding['title']) ?></h4>
     <?php if ($finding['location'] !== null) : ?>
-        <div class="small text-break"><span class="text-secondary">Где:</span> <?= e($finding['location']) ?></div>
+        <div class="small text-break">
+            <span class="text-secondary">Где:</span> <?= e($finding['location']) ?><?php if ($finding['line'] !== null) : ?>, <?= e($finding['line']) ?><?php endif; ?>
+        </div>
+    <?php endif; ?>
+    <?php if ($finding['widths'] !== null) : ?>
+        <div class="small"><span class="text-secondary">Ширины:</span> <?= e($finding['widths']) ?></div>
     <?php endif; ?>
     <?php if ($finding['pageUrl'] !== null) : ?>
         <div class="small text-break"><span class="text-secondary">Страница:</span> <?= e($finding['pageUrl']) ?></div>

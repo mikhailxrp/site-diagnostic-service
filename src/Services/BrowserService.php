@@ -3,7 +3,8 @@
 declare(strict_types=1);
 
 /**
- * Chrome без окна через `chrome-php/chrome`: запуск с отдельной папкой профиля, открытие страницы с тайм-аутом,
+ * Chrome без окна через `chrome-php/chrome`: запуск с отдельной папкой профиля, открытие страницы на заданной ширине
+ * с тайм-аутом и сбором событий DevTools (ошибки JS, консоль, запросы — разбор в `Checks/BrowserConsoleCheck.php`),
  * версия браузера, гарантированное закрытие и удаление профиля.
  *
  * Объекты `chrome-php` используются только в этом файле. Чистые функции (параметры запуска, отбор страниц,
@@ -16,6 +17,8 @@ use HeadlessChromium\Communication\Message;
 use HeadlessChromium\Exception\OperationTimedOut;
 use HeadlessChromium\Page;
 
+require_once ROOT_PATH . '/src/Services/Checks/BrowserConsoleCheck.php';
+
 const BROWSER_STARTUP_TIMEOUT_SECONDS = 30;    // запуск Chrome воркером
 const BROWSER_CHECK_TIMEOUT_SECONDS   = 15;    // «Проверить Chrome» из веба: меньше max_execution_time запроса
 const BROWSER_CHECK_TIME_LIMIT        = 60;    // set_time_limit() для проверки из веба: запуск + закрытие
@@ -25,6 +28,19 @@ const BROWSER_COMMAND_TIMEOUT_MS      = 10000; // синхронная кома�
 const BROWSER_POLL_INTERVAL_US        = 10000; // пауза между чтениями событий DevTools при ожидании загрузки
 const BROWSER_WINDOW_WIDTH            = 1366;
 const BROWSER_WINDOW_HEIGHT           = 768;
+const BROWSER_VIEWPORT_WIDTHS         = [360, 768, 1366]; // каждая страница загружается на каждой ширине
+const BROWSER_MOBILE_MAX_WIDTH        = 767;   // уже — мобильная эмуляция: учитывается <meta viewport>
+const BROWSER_SETTLE_MS               = 2000;  // после `load` ловим ошибки таймеров и отложенных скриптов
+
+/** События DevTools, которые собираются при загрузке (Network и Runtime включает `chrome-php`, Log — мы) */
+const BROWSER_COLLECTED_EVENTS = [
+    'Network.requestWillBeSent',
+    'Network.responseReceived',
+    'Network.loadingFailed',
+    'Runtime.exceptionThrown',
+    'Runtime.consoleAPICalled',
+    'Log.entryAdded',
+];
 
 const BROWSER_PROFILES_PATH           = ROOT_PATH . '/storage/temp';
 const BROWSER_PROFILE_PREFIX          = 'chrome-';
@@ -47,6 +63,21 @@ const BROWSER_UNAVAILABLE_PREFIX = 'Пропущено: Chrome недоступ�
 function isBrowserLibraryAvailable(): bool
 {
     return class_exists(BrowserFactory::class);
+}
+
+/**
+ * Параметры `Emulation.setDeviceMetricsOverride` для ширины: высота окна общая, узкие ширины — мобильная эмуляция.
+ *
+ * @return array{width: int, height: int, deviceScaleFactor: int, mobile: bool}
+ */
+function buildViewportOverride(int $width): array
+{
+    return [
+        'width'             => $width,
+        'height'            => BROWSER_WINDOW_HEIGHT,
+        'deviceScaleFactor' => 1,
+        'mobile'            => $width <= BROWSER_MOBILE_MAX_WIDTH,
+    ];
 }
 
 /**
@@ -99,19 +130,33 @@ function selectBrowserPages(array $pages): array
 }
 
 /**
- * «Открыто в браузере: 4 из 5 страниц; не открылось: 1; пропущено (защита от ботов): 1».
+ * «Открыто в браузере: 4 из 5 страниц (12 загрузок); не открылось: 1; ошибок JS: 3; упавших запросов: 2;
+ * пропущено (защита от ботов): 1». Страница открыта, если открылась хотя бы на одной ширине; если открылись не все
+ * загрузки — «(11 из 12 загрузок)».
  *
- * @param list<array{status: string}> $results результаты `openBrowserPage()`
+ * @param list<array{url: string, status: string}> $loads результаты `openBrowserPage()`
  */
-function buildBrowserStepMessage(array $results, int $blocked): string
+function buildBrowserStepMessage(array $loads, int $blocked, int $jsErrors = 0, int $failedRequests = 0): string
 {
-    $opened = count(array_filter($results, static fn (array $result): bool => $result['status'] === BROWSER_PAGE_OPENED));
-    $failed = count($results) - $opened;
+    $pages = [];
+    $openedLoads = 0;
+    foreach ($loads as $load) {
+        $isOpened = $load['status'] === BROWSER_PAGE_OPENED;
+        $pages[$load['url']] = ($pages[$load['url']] ?? false) || $isOpened;
+        $openedLoads += $isOpened ? 1 : 0;
+    }
+    $opened = count(array_filter($pages));
+    $failed = count($pages) - $opened;
+    $total = count($loads);
 
-    $message = "Открыто в браузере: {$opened} из " . (count($results) + $blocked) . ' страниц';
+    $message = "Открыто в браузере: {$opened} из " . (count($pages) + $blocked) . ' страниц';
+    if ($total > 0) {
+        $message .= ' (' . ($openedLoads === $total ? '' : "{$openedLoads} из ") . "{$total} загрузок)";
+    }
     if ($failed > 0) {
         $message .= "; не открылось: {$failed}";
     }
+    $message .= "; ошибок JS: {$jsErrors}; упавших запросов: {$failedRequests}";
     if ($blocked > 0) {
         $message .= "; пропущено (защита от ботов): {$blocked}";
     }
@@ -272,26 +317,44 @@ function getBrowserVersion(Browser $browser): ?string
 }
 
 /**
- * Открывает страницу в новой вкладке. Открыта — когда готов DOM (`DOMContentLoaded`); `load` ждём ещё не дольше
- * BROWSER_LOAD_WAIT_AFTER_DOM_MS (медленный сторонний ресурс задерживает `load` на десятки секунд — страница при
- * этом рабочая; `load_ms = null` — не дождались).
+ * Открывает страницу в новой вкладке на ширине `$width`. Открыта — когда готов DOM (`DOMContentLoaded`); `load` ждём
+ * ещё не дольше BROWSER_LOAD_WAIT_AFTER_DOM_MS (медленный сторонний ресурс задерживает `load` на десятки секунд —
+ * страница при этом рабочая; `load_ms = null` — не дождались), затем BROWSER_SETTLE_MS ловим поздние ошибки.
  * Сетевая ошибка (`net::ERR_NAME_NOT_RESOLVED` и т. п.) — `error`: Chrome показал бы свою страницу ошибки, и
  * `waitForNavigation()` из `chrome-php` счёл бы её загруженной. Не бросает исключений: итог — в результате.
+ * События DevTools сводятся `applyBrowserEvent()`; пришедшие после ожидания не учитываются.
  *
- * @return array{url: string, status: string, dom_ms: ?int, load_ms: ?int, error: ?string}
+ * @return array{url: string, width: int, status: string, dom_ms: ?int, load_ms: ?int, error: ?string,
+ *               events: list<array<string, mixed>>, dropped: int}
  */
-function openBrowserPage(Browser $browser, string $url, int $timeoutMs = BROWSER_PAGE_TIMEOUT_MS): array
+function openBrowserPage(Browser $browser, string $url, int $width = BROWSER_WINDOW_WIDTH, int $timeoutMs = BROWSER_PAGE_TIMEOUT_MS): array
 {
     $page = null;
-    $result = ['url' => $url, 'status' => BROWSER_PAGE_OPENED, 'dom_ms' => null, 'load_ms' => null, 'error' => null];
+    $state = createBrowserEventState(null);
+    $collecting = true;
+    $result = ['url' => $url, 'width' => $width, 'status' => BROWSER_PAGE_OPENED, 'dom_ms' => null, 'load_ms' => null,
+        'error' => null];
 
     try {
         $page = $browser->createPage();
+        $state = createBrowserEventState($page->getFrameManager()->getMainFrame()->getFrameId());
+        $session = $page->getSession();
+        foreach (BROWSER_COLLECTED_EVENTS as $method) {
+            $session->on('method:' . $method, static function (array $params) use (&$state, &$collecting, $method): void {
+                if ($collecting) {
+                    $state = applyBrowserEvent($state, $method, $params);
+                }
+            });
+        }
+        $session->sendMessageSync(new Message('Log.enable'), BROWSER_COMMAND_TIMEOUT_MS);
+        $page->setDeviceMetricsOverride(buildViewportOverride($width))->await(BROWSER_COMMAND_TIMEOUT_MS);
+
         $result = array_merge($result, navigateBrowserPage($page, $url, $timeoutMs));
     } catch (Throwable $e) {
         $result['status'] = BROWSER_PAGE_ERROR;
         $result['error'] = $e->getMessage() !== '' ? $e->getMessage() : get_class($e);
     } finally {
+        $collecting = false;
         if ($page !== null) {
             try {
                 $page->close();
@@ -301,11 +364,12 @@ function openBrowserPage(Browser $browser, string $url, int $timeoutMs = BROWSER
         }
     }
 
-    return $result;
+    return $result + ['events' => $state['events'], 'dropped' => $state['dropped']];
 }
 
 /**
- * `Page.navigate` и ожидание `DOMContentLoaded`, затем `load` — по событиям главного фрейма, с общим сроком.
+ * `Page.navigate` и ожидание `DOMContentLoaded`, затем `load` — по событиям главного фрейма, с общим сроком;
+ * после — BROWSER_SETTLE_MS чтения событий.
  * Новая навигация (JS-редирект) подменяет ожидаемую, как в нестрогом режиме `chrome-php`.
  *
  * @return array{status: string, dom_ms?: int, load_ms?: int, error?: string}
@@ -358,10 +422,20 @@ function navigateBrowserPage(Page $page, string $url, int $timeoutMs): array
                 ? $timeoutMs
                 : min($timeoutMs, $result['dom_ms'] + BROWSER_LOAD_WAIT_AFTER_DOM_MS);
             if ($elapsedMs() >= $deadline) {
-                return $key === 'dom_ms' ? $timeout : $result;
+                if ($key === 'dom_ms') {
+                    return $timeout;
+                }
+                break 2;
             }
             usleep(BROWSER_POLL_INTERVAL_US);
         }
+    }
+
+    // Ошибки из таймеров и отложенных скриптов приходят уже после `load`
+    $settleUntil = $elapsedMs() + BROWSER_SETTLE_MS;
+    while ($elapsedMs() < $settleUntil) {
+        $session->getConnection()->readData();
+        usleep(BROWSER_POLL_INTERVAL_US);
     }
 
     return $result;

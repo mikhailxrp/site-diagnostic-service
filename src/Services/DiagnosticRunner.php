@@ -248,9 +248,11 @@ function runSeoStep(array $context): array
 }
 
 /**
- * Шаг `browser` с настоящим Chrome и БД: главная и найденные страницы открываются в Chrome без окна (страницы
- * с защитой от ботов и без ответа — нет). Браузер закрывается и профиль удаляется в любом случае; heartbeat —
- * после каждой страницы. Chrome недоступен → `skipped` с причиной. Находок шаг пока не создаёт.
+ * Шаг `browser` с настоящим Chrome и БД: главная и найденные страницы открываются в Chrome без окна на каждой
+ * ширине BROWSER_VIEWPORT_WIDTHS (страницы с защитой от ботов и без ответа — нет). Браузер закрывается и профиль
+ * удаляется в любом случае; heartbeat — после каждой загрузки и каждого повторного запроса. Ошибки JS и упавшие
+ * запросы → находки `js_error` / `failed_request` (`Checks/BrowserConsoleCheck.php`). Chrome недоступен →
+ * `skipped` с причиной.
  *
  * @param array<string, mixed> $context
  * @return array<string, mixed>
@@ -273,23 +275,62 @@ function runBrowserStep(array $context): array
         return ['status' => STEP_STATUS_SKIPPED, 'message' => BROWSER_UNAVAILABLE_PREFIX . $e->getMessage()];
     }
 
-    $results = [];
+    $loads = [];
     try {
         foreach ($selection['open'] as $page) {
-            $results[] = openBrowserPage($session['browser'], $page['url']) + [
-                'types'   => $page['types'],
-                'page_id' => $page['page_id'],
-            ];
-            touchDiagnosticHeartbeat($diagnosticId);
+            foreach (BROWSER_VIEWPORT_WIDTHS as $width) {
+                $loads[] = openBrowserPage($session['browser'], $page['url'], $width) + [
+                    'types'   => $page['types'],
+                    'page_id' => $page['page_id'],
+                ];
+                touchDiagnosticHeartbeat($diagnosticId);
+            }
         }
     } finally {
         closeBrowser($session);
     }
 
+    $recheck = static function (string $url) use ($diagnosticId): array {
+        $response = httpRequest($url);
+        touchDiagnosticHeartbeat($diagnosticId);
+
+        return ['status' => $response['status'], 'error' => $response['error']];
+    };
+    // «Свой домен» — по главной: даже если она за защитой от ботов и в браузере не открывалась
+    $home = $context['facts']['availability']['home'] ?? [];
+    $homeUrl = (string) (($home['final_url'] ?? '') !== '' ? $home['final_url'] : ($selection['open'][0]['url'] ?? ''));
+    $browserFindings = buildBrowserFindings(
+        $loads,
+        $homeUrl,
+        collectBrokenResourceUrls($context['facts']['resources']['resources'] ?? []),
+        $recheck
+    );
+
     return [
-        'status'  => STEP_STATUS_DONE,
-        'message' => buildBrowserStepMessage($results, count($selection['blocked'])),
-        'facts'   => ['pages' => $results, 'blocked' => $selection['blocked']],
+        'status'   => STEP_STATUS_DONE,
+        'message'  => buildBrowserStepMessage(
+            $loads,
+            count($selection['blocked']),
+            $browserFindings['js_errors'],
+            $browserFindings['failed_requests']
+        ),
+        'facts'    => [
+            'loads'    => array_map(static fn (array $load): array => [
+                'url'     => $load['url'],
+                'width'   => $load['width'],
+                'status'  => $load['status'],
+                'dom_ms'  => $load['dom_ms'],
+                'load_ms' => $load['load_ms'],
+                'error'   => $load['error'],
+                'types'   => $load['types'],
+                'page_id' => $load['page_id'],
+                'events'  => count($load['events']),
+                'dropped' => $load['dropped'],
+            ], $loads),
+            'blocked'  => $selection['blocked'],
+            'rejected' => $browserFindings['rejected'],
+        ],
+        'findings' => $browserFindings['findings'],
     ];
 }
 
