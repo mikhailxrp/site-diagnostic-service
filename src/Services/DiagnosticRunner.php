@@ -46,6 +46,7 @@ const STEP_STATUS_SKIPPED = 'skipped';
 const STEP_STATUS_FAILED  = 'failed';
 
 const STEP_STOPPED_MESSAGE         = 'Пропущено: шаг «%s» остановил проверку.';
+const AI_STEP_CODE_PREFIX          = 'ai_';
 
 /**
  * Шаги диагностики по порядку. Обработчик получает контекст и возвращает
@@ -70,6 +71,20 @@ function getDiagnosticSteps(): array
         ['code' => 'ai_visual',    'title' => 'Проверка вёрстки (ИИ)',   'handler' => 'runAiVisualStep'],
         ['code' => 'ai_summary',   'title' => 'Итоговый вывод (ИИ)',     'handler' => 'runAiSummaryStep'],
     ];
+}
+
+/**
+ * Только ИИ-шаги (код начинается с `ai_`) в порядке полного списка — для перезапуска ИИ-анализа по сохранённым
+ * фактам: ни один из них не обращается к проверяемому сайту.
+ *
+ * @return list<array{code: string, title: string, handler: callable-string}>
+ */
+function getAiSteps(): array
+{
+    return array_values(array_filter(
+        getDiagnosticSteps(),
+        static fn (array $step): bool => str_starts_with($step['code'], AI_STEP_CODE_PREFIX)
+    ));
 }
 
 /**
@@ -800,6 +815,46 @@ function runDiagnostic(int $id): bool
     $steps = getDiagnosticSteps();
     createDiagnosticSteps($id, $steps);
 
+    executeStepsWithDb($id, $steps, $diagnostic);
+    finishDiagnostic($id, 'done', null);
+
+    return true;
+}
+
+/**
+ * Перезапуск ИИ-анализа воркером: только ИИ-шаги по фактам из БД, без запросов к проверяемому сайту.
+ * Ничего не делает, если диагностика не в `queued` (её ставит в очередь `queueAiRerun()`).
+ *
+ * @return bool true — перезапуск выполнен этим вызовом
+ */
+function runAiRerun(int $id): bool
+{
+    if (!claimAiRerun($id)) {
+        return false;
+    }
+
+    $steps = getAiSteps();
+    resetAiSteps($id, $steps);
+
+    $diagnostic = getDiagnosticWithSteps($id);
+    if ($diagnostic === null) {
+        throw new RuntimeException("Диагностика {$id} пропала после запуска.");
+    }
+
+    executeStepsWithDb($id, $steps, $diagnostic);
+    finishDiagnostic($id, 'done', null);
+
+    return true;
+}
+
+/**
+ * Выполняет шаги с записью в БД: статус и сообщение шага, находки, прогресс и heartbeat.
+ *
+ * @param list<array{code: string, title: string, handler: callable}> $steps
+ * @param array<string, mixed> $diagnostic строка `diagnostics`
+ */
+function executeStepsWithDb(int $id, array $steps, array $diagnostic): void
+{
     executeSteps(
         $steps,
         buildStepContext($diagnostic),
@@ -825,10 +880,6 @@ function runDiagnostic(int $id): bool
             updateDiagnosticProgress($id, $progress);
         }
     );
-
-    finishDiagnostic($id, 'done', null);
-
-    return true;
 }
 
 /**

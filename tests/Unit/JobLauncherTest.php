@@ -26,6 +26,27 @@ final class JobLauncherTest extends TestCase
         );
     }
 
+    public function testAiOnlyModeAddsFlag(): void
+    {
+        $command = buildWorkerCommand('C:/php.exe', 'C:/site/bin/worker.php', 42, WORKER_MODE_AI_ONLY);
+
+        $this->assertSame('start "" /B "C:\php.exe" "C:\site\bin\worker.php" 42 --ai > NUL 2>&1', $command);
+    }
+
+    public function testFullModeHasNoFlag(): void
+    {
+        $command = buildWorkerCommand('C:/php.exe', 'C:/site/bin/worker.php', 42, WORKER_MODE_FULL);
+
+        $this->assertSame(buildWorkerCommand('C:/php.exe', 'C:/site/bin/worker.php', 42), $command);
+        $this->assertStringNotContainsString('--ai', $command);
+    }
+
+    public function testUnknownModeIsRejected(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        buildWorkerCommand('C:/php.exe', 'C:/site/bin/worker.php', 1, 'everything');
+    }
+
     public function testPathsWithSpacesAreQuoted(): void
     {
         $command = buildWorkerCommand('C:/Program Files/PHP/php.exe', 'D:/my sites/bin/worker.php', 7);

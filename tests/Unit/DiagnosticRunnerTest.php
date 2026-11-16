@@ -74,6 +74,37 @@ final class DiagnosticRunnerTest extends TestCase
         ];
     }
 
+    public function testAiStepsAreOnlyAiStepsInOrder(): void
+    {
+        $this->assertSame(
+            ['ai_problem', 'ai_visual', 'ai_summary'],
+            array_column(getAiSteps(), 'code')
+        );
+    }
+
+    public function testAiRerunDoesNotRunSiteSteps(): void
+    {
+        $siteHandlers = [
+            'runAvailabilityStep', 'runStackStep', 'runOutdatedStep', 'runVulnerabilitiesStep', 'runCrawlStep',
+            'runResourcesStep', 'runSeoStep', 'runBrowserStep', 'runPageSpeedStep',
+        ];
+
+        $this->assertSame(
+            ['runAiProblemStep', 'runAiVisualStep', 'runAiSummaryStep'],
+            array_column(getAiSteps(), 'handler')
+        );
+        $this->assertSame([], array_intersect($siteHandlers, array_column(getAiSteps(), 'handler')));
+    }
+
+    public function testAiStepsMatchFullListEntries(): void
+    {
+        $full = array_column(getDiagnosticSteps(), null, 'code');
+
+        foreach (getAiSteps() as $step) {
+            $this->assertSame($full[$step['code']], $step);
+        }
+    }
+
     #[DataProvider('progressCases')]
     public function testCalculateProgress(int $finished, int $total, int $expected): void
     {

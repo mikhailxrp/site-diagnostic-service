@@ -9,21 +9,37 @@ declare(strict_types=1);
 
 const WORKER_SCRIPT_PATH = ROOT_PATH . '/bin/worker.php';
 
+/** Режимы воркера: полная диагностика или перезапуск только ИИ-шагов (флаг `--ai`) */
+const WORKER_MODE_FULL    = 'full';
+const WORKER_MODE_AI_ONLY = 'ai';
+const WORKER_AI_ONLY_FLAG = '--ai';
+
 /**
- * Команда для cmd.exe: `start "" /B "<php>" "<worker>" <id> > NUL 2>&1`.
+ * Команда для cmd.exe: `start "" /B "<php>" "<worker>" <id> [--ai] > NUL 2>&1`.
  * Пустой заголовок `""` обязателен: иначе `start` примет путь к php в кавычках за заголовок окна.
  */
-function buildWorkerCommand(string $phpPath, string $scriptPath, int $diagnosticId): string
-{
+function buildWorkerCommand(
+    string $phpPath,
+    string $scriptPath,
+    int $diagnosticId,
+    string $mode = WORKER_MODE_FULL
+): string {
     if ($diagnosticId <= 0) {
         throw new InvalidArgumentException("Неверный id диагностики: {$diagnosticId}");
     }
 
+    $flag = match ($mode) {
+        WORKER_MODE_FULL    => '',
+        WORKER_MODE_AI_ONLY => ' ' . WORKER_AI_ONLY_FLAG,
+        default             => throw new InvalidArgumentException("Неизвестный режим воркера: {$mode}"),
+    };
+
     return sprintf(
-        'start "" /B %s %s %d > NUL 2>&1',
+        'start "" /B %s %s %d%s > NUL 2>&1',
         quoteWindowsPath($phpPath),
         quoteWindowsPath($scriptPath),
-        $diagnosticId
+        $diagnosticId,
+        $flag
     );
 }
 
@@ -40,10 +56,10 @@ function quoteWindowsPath(string $path): string
 }
 
 /**
- * Запускает `bin/worker.php <id>` в фоне. Ошибка запуска → исключение
- * (вызывающий помечает диагностику `failed`).
+ * Запускает `bin/worker.php <id> [--ai]` в фоне. Ошибка запуска → исключение
+ * (вызывающий помечает диагностику `failed` или откатывает постановку в очередь).
  */
-function launchWorker(int $diagnosticId): void
+function launchWorker(int $diagnosticId, string $mode = WORKER_MODE_FULL): void
 {
     if (PHP_OS_FAMILY !== 'Windows') {
         throw new RuntimeException('Фоновый запуск воркера поддерживается только на Windows.');
@@ -53,7 +69,7 @@ function launchWorker(int $diagnosticId): void
         throw new RuntimeException('PHP CLI не найден: проверьте PHP_CLI_PATH в .env (' . PHP_CLI_PATH . ').');
     }
 
-    $command = buildWorkerCommand(PHP_CLI_PATH, WORKER_SCRIPT_PATH, $diagnosticId);
+    $command = buildWorkerCommand(PHP_CLI_PATH, WORKER_SCRIPT_PATH, $diagnosticId, $mode);
     $process = popen($command, 'r');
 
     if ($process === false) {

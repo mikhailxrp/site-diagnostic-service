@@ -34,6 +34,16 @@ final class DiagnosticController
     private const RATE_LIMIT_MAX_ATTEMPTS   = 5;
     private const RATE_LIMIT_WINDOW_SECONDS = 60;
 
+    /**
+     * Перезапуск ИИ-анализа — платные запросы к RouterAI: не больше 3 за 60 секунд.
+     */
+    private const AI_RERUN_RATE_LIMIT_ACTION         = 'ai_rerun';
+    private const AI_RERUN_RATE_LIMIT_MAX_ATTEMPTS   = 3;
+    private const AI_RERUN_RATE_LIMIT_WINDOW_SECONDS = 60;
+
+    /** Перезапуск ИИ принимается только у завершённой диагностики */
+    private const AI_RERUN_STATUS = 'done';
+
     /** Как diagnostics.error_message VARCHAR(1000) */
     private const ERROR_MESSAGE_MAX_LENGTH = 1000;
 
@@ -71,7 +81,64 @@ final class DiagnosticController
             'hasReport'   => $hasReport,
             'report'      => $report,
             'reportError' => $hasReport && $report === null,
+            'aiRerunUrl'  => $diagnostic['status'] === self::AI_RERUN_STATUS
+                ? '/diagnostics/' . $diagnostic['id'] . '/ai-rerun'
+                : null,
         ]);
+    }
+
+    /**
+     * «Перезапустить ИИ-анализ»: завершённая диагностика ставится в очередь, воркер проходит только ИИ-шаги
+     * по сохранённым фактам → экран прогресса. Работающая диагностика не принимается.
+     */
+    public function rerunAi(string $id): void
+    {
+        requireCsrf();
+
+        $diagnosticId = parseDiagnosticId($id);
+        if ($diagnosticId === null) {
+            setFlash('error', 'Диагностика не найдена.');
+            redirect('/history');
+        }
+        $diagnosticUrl = '/diagnostics/' . $diagnosticId;
+
+        if (tooManyAttempts(
+            self::AI_RERUN_RATE_LIMIT_ACTION,
+            self::AI_RERUN_RATE_LIMIT_MAX_ATTEMPTS,
+            self::AI_RERUN_RATE_LIMIT_WINDOW_SECONDS
+        )) {
+            logWarning('Превышен лимит перезапусков ИИ-анализа', [
+                'diagnostic_id'  => $diagnosticId,
+                'max_attempts'   => self::AI_RERUN_RATE_LIMIT_MAX_ATTEMPTS,
+                'window_seconds' => self::AI_RERUN_RATE_LIMIT_WINDOW_SECONDS,
+            ]);
+            setFlash('error', 'Слишком много перезапусков подряд. Подождите минуту и попробуйте снова.');
+            redirect($diagnosticUrl);
+        }
+        hitRateLimit(self::AI_RERUN_RATE_LIMIT_ACTION, self::AI_RERUN_RATE_LIMIT_WINDOW_SECONDS);
+
+        try {
+            $isQueued = queueAiRerun($diagnosticId);
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId]);
+            setFlash('error', 'Не удалось перезапустить ИИ-анализ. Подробности в журнале.');
+            redirect($diagnosticUrl);
+        }
+
+        if (!$isQueued) {
+            setFlash('error', 'ИИ-анализ не перезапущен: диагностика ещё выполняется или не завершена.');
+            redirect($diagnosticUrl);
+        }
+
+        try {
+            launchWorker($diagnosticId, WORKER_MODE_AI_ONLY);
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId]);
+            $this->restoreAfterRerunLaunchFailed($diagnosticId);
+            setFlash('error', 'Не удалось перезапустить ИИ-анализ: ' . $e->getMessage());
+        }
+
+        redirect($diagnosticUrl);
     }
 
     public function status(string $id): void
@@ -231,6 +298,15 @@ final class DiagnosticController
 
         try {
             finishDiagnostic($diagnosticId, 'failed', $message);
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId]);
+        }
+    }
+
+    private function restoreAfterRerunLaunchFailed(int $diagnosticId): void
+    {
+        try {
+            restoreDiagnosticDone($diagnosticId);
         } catch (Throwable $e) {
             logException($e, ['diagnostic_id' => $diagnosticId]);
         }

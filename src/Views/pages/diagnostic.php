@@ -102,17 +102,30 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                             </div>
                         <?php endif; ?>
                         <div class="row row-cards">
-                            <?php if ($report['aiSummary'] !== null) : ?>
+                            <?php if ($report['aiSummary'] !== null || ($aiRerunUrl ?? null) !== null) : ?>
                                 <div class="col-12">
                                     <section class="card" aria-labelledby="report-ai-summary-title">
                                         <div class="card-status-top bg-purple"></div>
-                                        <div class="card-header">
+                                        <div class="card-header flex-wrap gap-2">
                                             <h2 class="card-title" id="report-ai-summary-title">Итоговый вывод (ИИ)</h2>
-                                            <div class="card-actions">
+                                            <div class="card-actions d-flex flex-wrap align-items-center gap-2">
                                                 <span class="badge bg-purple-lt">ИИ</span>
+                                                <?php if (($aiRerunUrl ?? null) !== null) : ?>
+                                                    <form method="post" action="<?= e($aiRerunUrl) ?>" class="m-0">
+                                                        <?= csrfField() ?>
+                                                        <button type="submit" class="btn btn-outline-purple btn-lg">
+                                                            <i class="ti ti-refresh icon" aria-hidden="true"></i>
+                                                            Перезапустить ИИ-анализ
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
-                                        <?php if ($report['aiSummary']['state'] === 'done') : ?>
+                                        <?php if ($report['aiSummary'] === null) : ?>
+                                            <div class="card-body">
+                                                <p class="text-secondary mb-0">ИИ-анализ для этой диагностики не проводился. Он пройдёт по сохранённым фактам, без новых запросов к сайту.</p>
+                                            </div>
+                                        <?php elseif ($report['aiSummary']['state'] === 'done') : ?>
                                             <div class="card-body border-bottom">
                                                 <?php if ($report['aiSummary']['severityLabel'] !== null) : ?>
                                                     <div class="mb-2">
@@ -160,7 +173,9 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                                 <?php endif; ?>
                                             <?php endif; ?>
                                         <?php endif; ?>
-                                        <?php render('components/ai-block', ['aiBlock' => $report['aiSummary']]); ?>
+                                        <?php if ($report['aiSummary'] !== null) : ?>
+                                            <?php render('components/ai-block', ['aiBlock' => $report['aiSummary']]); ?>
+                                        <?php endif; ?>
                                     </section>
                                 </div>
                             <?php endif; ?>

@@ -89,6 +89,95 @@ function claimDiagnostic(int $id): bool
 }
 
 /**
+ * Ставит завершённую диагностику в очередь на перезапуск ИИ-анализа: атомарно `done → queued`.
+ * Heartbeat обновляется, чтобы диагностику в очереди не пометило зависшей.
+ * false — диагностики нет или она не в `done` (например, ещё выполняется).
+ */
+function queueAiRerun(int $id): bool
+{
+    $statement = getPdo()->prepare(
+        "UPDATE diagnostics SET status = 'queued', heartbeat_at = NOW()
+         WHERE id = :id AND status = 'done'"
+    );
+    $statement->execute(['id' => $id]);
+
+    return $statement->rowCount() === 1;
+}
+
+/**
+ * Откат постановки в очередь, если воркер перезапуска не запустился: `queued → done`.
+ * Шаги и находки к этому моменту не тронуты.
+ */
+function restoreDiagnosticDone(int $id): void
+{
+    $statement = getPdo()->prepare(
+        "UPDATE diagnostics SET status = 'done' WHERE id = :id AND status = 'queued'"
+    );
+    $statement->execute(['id' => $id]);
+}
+
+/**
+ * Воркер перезапуска ИИ берёт диагностику: атомарно `queued → running`, `started_at` первого запуска не меняется.
+ * false — диагностики нет или её уже взял воркер.
+ */
+function claimAiRerun(int $id): bool
+{
+    $statement = getPdo()->prepare(
+        "UPDATE diagnostics SET status = 'running', error_message = NULL, heartbeat_at = NOW()
+         WHERE id = :id AND status = 'queued'"
+    );
+    $statement->execute(['id' => $id]);
+
+    return $statement->rowCount() === 1;
+}
+
+/**
+ * Подготовка перезапуска ИИ одной транзакцией: недостающие ИИ-шаги добавляются в конец списка, существующие
+ * сбрасываются в `pending`, находки `source = 'ai'` удаляются (история `ai_results` остаётся), прогресс — 0.
+ *
+ * @param list<array{code: string, title: string}> $steps ИИ-шаги по порядку
+ */
+function resetAiSteps(int $id, array $steps): void
+{
+    $pdo = getPdo();
+    $maxPosition = $pdo->prepare(
+        'SELECT COALESCE(MAX(position), 0) FROM diagnostic_steps WHERE diagnostic_id = :id'
+    );
+    $upsertStep = $pdo->prepare(
+        "INSERT INTO diagnostic_steps (diagnostic_id, step_code, title, position)
+         VALUES (:diagnostic_id, :step_code, :title, :position)
+         ON DUPLICATE KEY UPDATE status = 'pending', message = NULL, started_at = NULL, finished_at = NULL"
+    );
+    $deleteAiFindings = $pdo->prepare(
+        "DELETE FROM findings WHERE diagnostic_id = :id AND source = 'ai'"
+    );
+    $resetProgress = $pdo->prepare(
+        'UPDATE diagnostics SET progress = 0, heartbeat_at = NOW() WHERE id = :id'
+    );
+
+    $pdo->beginTransaction();
+    try {
+        $maxPosition->execute(['id' => $id]);
+        $position = (int) $maxPosition->fetchColumn();
+
+        foreach (array_values($steps) as $index => $step) {
+            $upsertStep->execute([
+                'diagnostic_id' => $id,
+                'step_code'     => $step['code'],
+                'title'         => $step['title'],
+                'position'      => $position + $index + 1,
+            ]);
+        }
+        $deleteAiFindings->execute(['id' => $id]);
+        $resetProgress->execute(['id' => $id]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+}
+
+/**
  * Создаёт все шаги в статусе `pending` одной транзакцией.
  *
  * @param list<array{code: string, title: string}> $steps

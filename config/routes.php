@@ -22,5 +22,6 @@ return [
         '/settings/browser'        => ['SettingsController', 'saveBrowser'],
         '/diagnostics'             => ['DiagnosticController', 'store'],
         '/diagnostics/{id}/delete' => ['HistoryController', 'delete'],
+        '/diagnostics/{id}/ai-rerun' => ['DiagnosticController', 'rerunAi'],
     ],
 ];
