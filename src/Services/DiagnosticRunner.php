@@ -12,7 +12,10 @@ require_once ROOT_PATH . '/src/Models/DiagnosticModel.php';
 require_once ROOT_PATH . '/src/Models/FindingModel.php';
 require_once ROOT_PATH . '/src/Models/PageModel.php';
 require_once ROOT_PATH . '/src/Models/StackModel.php';
+require_once ROOT_PATH . '/src/Models/SettingsModel.php';
 require_once ROOT_PATH . '/src/Services/HttpClient.php';
+require_once ROOT_PATH . '/src/Services/SettingsService.php';
+require_once ROOT_PATH . '/src/Services/BrowserService.php';
 require_once ROOT_PATH . '/src/Services/Checks/AvailabilityCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SslCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/StackCheck.php';
@@ -53,6 +56,7 @@ function getDiagnosticSteps(): array
         ['code' => 'crawl',        'title' => 'Поиск страниц магазина', 'handler' => 'runCrawlStep'],
         ['code' => 'resources',    'title' => 'Битые ресурсы',           'handler' => 'runResourcesStep'],
         ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
+        ['code' => 'browser',      'title' => 'Проверка в браузере',     'handler' => 'runBrowserStep'],
     ];
 }
 
@@ -241,6 +245,52 @@ function runSeoStep(array $context): array
     }
 
     return $result;
+}
+
+/**
+ * Шаг `browser` с настоящим Chrome и БД: главная и найденные страницы открываются в Chrome без окна (страницы
+ * с защитой от ботов и без ответа — нет). Браузер закрывается и профиль удаляется в любом случае; heartbeat —
+ * после каждой страницы. Chrome недоступен → `skipped` с причиной. Находок шаг пока не создаёт.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runBrowserStep(array $context): array
+{
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $selection = selectBrowserPages(collectResourcePages($context));
+
+    if ($selection['open'] === []) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => BROWSER_NO_PAGES_MESSAGE];
+    }
+    if (!isBrowserLibraryAvailable()) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => BROWSER_NO_LIBRARY_MESSAGE];
+    }
+
+    try {
+        $session = launchBrowser(resolveChromePath(getSetting(CHROME_PATH_SETTING)), $diagnosticId, BROWSER_STARTUP_TIMEOUT_SECONDS);
+    } catch (RuntimeException $e) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => BROWSER_UNAVAILABLE_PREFIX . $e->getMessage()];
+    }
+
+    $results = [];
+    try {
+        foreach ($selection['open'] as $page) {
+            $results[] = openBrowserPage($session['browser'], $page['url']) + [
+                'types'   => $page['types'],
+                'page_id' => $page['page_id'],
+            ];
+            touchDiagnosticHeartbeat($diagnosticId);
+        }
+    } finally {
+        closeBrowser($session);
+    }
+
+    return [
+        'status'  => STEP_STATUS_DONE,
+        'message' => buildBrowserStepMessage($results, count($selection['blocked'])),
+        'facts'   => ['pages' => $results, 'blocked' => $selection['blocked']],
+    ];
 }
 
 /**

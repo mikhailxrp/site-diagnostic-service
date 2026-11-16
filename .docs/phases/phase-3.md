@@ -1,19 +1,39 @@
 # Phase 3 — Проверка в браузере
 
 ## Цель
-В отчёте видны ошибки JavaScript и упавшие запросы с каждой проверенной страницы, скриншоты на ширинах 360 / 768 / 1366 и оценка скорости от PageSpeed Insights.
+В отчёте видны ошибки JavaScript и упавшие запросы с каждой проверенной страницы, скриншоты на ширинах
+360 / 768 / 1366 и оценка скорости от PageSpeed Insights.
 
 ## Статус
-⏳ Ожидает
+🔄 В работе
 
-> План предварительный: перепроверить через `.docs/prompts/phase-init.md` перед началом фазы.
-> Нужно: Google Chrome на ПК, ключ PageSpeed Insights (открытый вопрос PRD).
+> План перепроверен 16.11.2026 с учётом сделанного в Фазах 1–2 (`phase-init.md`).
+> Дизайн: образцов нет — экраны из стандартных компонентов Tabler (решение владельца, 15.11.2026).
+> Экраны: настройки — `src/Views/pages/settings.php`, отчёт — `src/Views/pages/diagnostic.php` (данные готовит
+> `src/Services/ReportBuilder.php`), компоненты — `src/Views/components/`.
+> Окружение (проверено 16.11.2026): Google Chrome 157 — `C:\Program Files\Google\Chrome\Application\chrome.exe`;
+> PHP 8.3 OpenServer — расширение `sockets` включено; `chrome-php/chrome` v1.16.2 (PHP `^8.0.2`).
+> Ключ PageSpeed Insights (`PAGESPEED_API_KEY`) лежит в `.env` — таск 4 не блокирован.
+
+**Решения:**
+- Страницы для браузера — те, что нашёл шаг `crawl` (главная, каталог, товар, корзина, оформление). Страницы с
+  `checked_pages.blocked = 1` в браузере не открываются.
+- Каждая страница загружается на каждой ширине (360 / 768 / 1366): ошибки JS собираются со всех загрузок
+  (часть ошибок бывает только на мобильной вёрстке), повторы склеиваются в одну находку.
+- Heartbeat: диагностика без отметки воркера 10 минут (`HEARTBEAT_STALE_SECONDS`) считается прерванной —
+  шаг `browser` обновляет отметку после каждой загрузки.
+- Упавший запрос, который уже есть среди находок `broken_resource` (шаг `resources`), второй находкой не
+  становится.
+- Тайм-ауты Chrome и PageSpeed — именованные константы (лимитов обхода нет, решение владельца).
+
+**Сайты для ручной проверки:** https://sudar.su/, https://cleansan.ru/, https://www.citilink.ru/ (как в Фазе 2)
+и любой магазин на WordPress / WooCommerce.
 
 ## Таски
 
 | # | Название | Статус |
 |---|----------|--------|
-| 1 | Подключить Chrome без окна | ⏳ Ожидает |
+| 1 | Подключить Chrome без окна | ✅ Завершён |
 | 2 | Ошибки JS и упавшие запросы | ⏳ Ожидает |
 | 3 | Скриншоты на трёх ширинах | ⏳ Ожидает |
 | 4 | Скорость через PageSpeed Insights | ⏳ Ожидает |
@@ -22,22 +42,37 @@
 
 ## Таск 1 — Подключить Chrome без окна
 
-**Статус:** ⏳ Ожидает
+**Статус:** ✅ Завершён
+
+**Образец:** образца нет — компоненты Tabler (поле на странице настроек)
 
 **Цель таска:**
-Воркер запускает Chrome в headless-режиме через `chrome-php/chrome`, открывает страницу и гарантированно закрывает браузер; без Chrome шаги браузера пропускаются.
+Воркер запускает Chrome без окна через `chrome-php/chrome`, открывает каждую проверенную страницу с тайм-аутом
+и гарантированно закрывает браузер. Без Chrome шаг `browser` — `skipped` с причиной, отчёт строится.
 
 **Что нужно создать/изменить:**
-- `composer.json` — `chrome-php/chrome` в `require`, автозагрузка `vendor/autoload.php` в воркере
-- `src/Services/BrowserService.php` — запуск (путь из настройки `chrome_path`), открытие страницы с тайм-аутом, закрытие в `finally`
-- `src/Views/settings/index.php`, `SettingsService.php` — поле `chrome_path` + кнопка «Проверить Chrome»
-- `src/Services/DiagnosticRunner.php` — шаг `browser`, `skipped` если Chrome недоступен
+- `composer.json` — `chrome-php/chrome` `^1.16` в `require`; `vendor/autoload.php` подключается в
+  `config/config.php`
+- `src/Services/BrowserService.php` — запуск по настройке `chrome_path`, отдельная временная папка профиля в
+  `storage/`, тайм-ауты константами, закрытие браузера и удаление профиля в `finally`
+- `src/Services/SettingsService.php`, `src/Controllers/SettingsController.php`, `src/Views/pages/settings.php` —
+  поле `chrome_path` (по умолчанию стандартный путь) и кнопка «Проверить Chrome» (POST + CSRF → redirect + flash)
+- `src/Services/DiagnosticRunner.php` — шаг `browser` после `seo`: пропуск страниц с `blocked`, heartbeat после
+  каждой загрузки
+- `tests/Unit/BrowserServiceTest.php` — проверка пути, сборка параметров запуска
+- Сделано сверх плана / по-другому: страница «открыта» по `DOMContentLoaded`, `load` ждём ещё не дольше 10 с
+  (на cleansan.ru `load` — через 35 с); свой `Page.navigate` вместо `waitForNavigation()` — из ответа берётся
+  `errorText` (`net::ERR_NAME_NOT_RESOLVED`), иначе страница ошибки Chrome считалась загруженной;
+  `CHROME_DEFAULT_PATH` — в `SettingsService.php` (тесты не подключают `config.php`); `composer.json` —
+  `config.platform.php = 8.3.6`; composer запускать PHP из OpenServer (у системного PHP 8.4 нет `sockets`)
 
 **Definition of Done:**
-- [ ] «Проверить Chrome» показывает версию или понятную ошибку
-- [ ] После диагностики в диспетчере задач не остаётся процессов `chrome.exe` от воркера
-- [ ] Неверный путь к Chrome → шаг `skipped` с причиной, отчёт строится
-- [ ] Проверить `.docs/dod-global.md`
+- [x] «Проверить Chrome» показывает версию браузера или понятную ошибку
+- [x] После диагностики (в том числе упавшей) в диспетчере задач нет процессов `chrome.exe` от воркера,
+      временная папка профиля удалена
+- [x] Неверный путь к Chrome → шаг `skipped` с причиной, отчёт строится
+- [x] Диагностика с 5 страницами не помечается прерванной (heartbeat обновляется)
+- [x] Проверить `.docs/dod-global.md`
 
 ---
 
@@ -45,19 +80,29 @@
 
 **Статус:** ⏳ Ожидает
 
+**Образец:** образца нет — существующий компонент находки
+
 **Цель таска:**
-На каждой проверенной странице собираются ошибки консоли, необработанные исключения и сетевые запросы с ошибкой или кодом 4xx/5xx.
+На каждой странице и каждой ширине собираются необработанные исключения, ошибки консоли, запросы с сетевой
+ошибкой и с ответом 4xx/5xx; они становятся находками `js_error` / `failed_request` со страницей, файлом и
+строкой.
 
 **Что нужно создать/изменить:**
-- `src/Services/Checks/BrowserConsoleCheck.php` — подписка на `Runtime.exceptionThrown`, `Log.entryAdded`, `Network.loadingFailed`, `Network.responseReceived`
-- `src/Services/FindingFactory.php` — категории `js_error`, `failed_request`, группировка повторов
-- `src/Views/components/finding.php` — вывод файла, строки и текста ошибки JS
-- `tests/Unit/BrowserConsoleCheckTest.php` — разбор заготовленных событий
+- `src/Services/BrowserService.php` — подписка на `Runtime.exceptionThrown`, `Log.entryAdded`,
+  `Network.loadingFailed`, `Network.responseReceived`
+- `src/Services/Checks/BrowserConsoleCheck.php` — разбор событий без браузера (чистые функции), склейка повторов
+  со счётчиком страниц и ширин, пропуск того, что уже есть среди `broken_resource`
+- `data/browser-ignore.php` — счётчики и реклама (Метрика, GA, VK и т. п.) и отказы, которые вызвал сам браузер
+  (`ERR_BLOCKED_BY_CLIENT`, отменённые запросы)
+- `src/Services/FindingFactory.php` — серьёзность по умолчанию для `js_error`, `failed_request`
+- `src/Views/components/finding.php` — файл, строка, текст ошибки, ширины
+- `tests/Unit/BrowserConsoleCheckTest.php` + фикстуры событий `tests/fixtures/browser/`
 
 **Definition of Done:**
-- [ ] Ошибка `Uncaught TypeError` на тестовой странице попадает в отчёт со страницей, файлом и строкой
-- [ ] Запросы к счётчикам/рекламе, заблокированные браузером, не считаются поломкой (список исключений)
-- [ ] Повторяющаяся ошибка — одна находка со счётчиком
+- [ ] `Uncaught TypeError` на тестовой странице попадает в отчёт со страницей, файлом и строкой
+- [ ] Запросы к счётчикам / рекламе и отказы, вызванные самим браузером, не считаются поломкой (тест)
+- [ ] Повторяющаяся ошибка — одна находка со счётчиком (тест)
+- [ ] 404 по ресурсу, который уже есть среди `broken_resource`, не даёт второй находки
 - [ ] Проверить `.docs/dod-global.md`
 
 ---
@@ -66,22 +111,29 @@
 
 **Статус:** ⏳ Ожидает
 
-**Образец:** образца нет
+**Образец:** образца нет — компоненты Tabler (миниатюры в карточке «Проверенные страницы», крупно — модальное
+окно Tabler)
 
 **Цель таска:**
-Для каждой проверенной страницы есть скриншоты 360 / 768 / 1366, они видны в отчёте и открываются крупно.
+Для каждой проверенной страницы есть скриншоты 360 / 768 / 1366, они видны в отчёте и открываются крупно;
+при удалении диагностики удаляются и их файлы.
 
 **Что нужно создать/изменить:**
-- `src/Services/ScreenshotService.php` — смена ширины, ожидание загрузки, полноразмерный снимок с ограничением высоты, сохранение в `storage/screenshots/<id>/`
-- `src/Models/ScreenshotModel.php` + таблица `screenshots`
-- `src/Controllers/ScreenshotController.php` — отдача файла по id из БД; путь только внутри `storage/screenshots/`
-- `src/Views/components/screenshot-gallery.php`
-- `config/routes.php` — `/screenshots/{id}`
+- `database/install.php` — таблица `screenshots` (по `.docs/database.md`)
+- `src/Services/ScreenshotService.php` — смена ширины, ожидание загрузки, снимок всей страницы с пределом высоты
+  (константа), сохранение в `storage/screenshots/<diagnostic_id>/`, удаление папки диагностики
+- `src/Models/ScreenshotModel.php`
+- `src/Controllers/ScreenshotController.php`, `config/routes.php` — `/screenshots/{id}`: файл по id из БД, путь
+  проверяется через `realpath` внутри `storage/screenshots/`
+- `src/Views/components/screenshot-gallery.php`, `src/Services/ReportBuilder.php`, `src/Views/pages/diagnostic.php`
+- `src/Controllers/HistoryController.php` — удаление диагностики удаляет и файлы скриншотов
 
 **Definition of Done:**
-- [ ] 3 скриншота на страницу, у картинок есть `alt` (страница + ширина)
-- [ ] Несуществующий id → 404; произвольный путь (`../`) файл вне `storage/screenshots/` не отдаёт
-- [ ] Очень длинная страница обрезается по лимиту высоты, а не роняет шаг
+- [ ] 3 скриншота на страницу, у картинок `alt` вида «Главная, 360 px»
+- [ ] Несуществующий id → 404; файл вне `storage/screenshots/` не отдаётся
+- [ ] Очень длинная страница обрезается по пределу высоты, а не роняет шаг
+- [ ] Удаление диагностики в истории удаляет папку `storage/screenshots/<id>/`
+- [ ] Отчёт проверен на 360 / 768 / 1280 px
 - [ ] Проверить `.docs/dod-global.md`
 
 ---
@@ -90,16 +142,24 @@
 
 **Статус:** ⏳ Ожидает
 
+**Образец:** образца нет — компоненты Tabler (блок «Скорость» в отчёте)
+
 **Цель таска:**
-Шаг `pagespeed`: оценка для мобильных и десктопа и основные метрики (LCP, CLS, TBT / INP, FCP) для главной.
+Шаг `pagespeed` для главной: оценки mobile / desktop, лабораторные метрики (LCP, CLS, TBT, FCP) и, если есть
+у Google, данные реальных пользователей (в том числе INP); находки `speed` по порогам Core Web Vitals.
 
 **Что нужно создать/изменить:**
-- `src/Services/PageSpeedService.php` — запрос к API `runPagespeed` с ключом `PAGESPEED_API_KEY` из `.env`, тайм-аут, разбор ответа
-- `src/Services/Checks/SpeedCheck.php` — находки `speed` по порогам Core Web Vitals
-- `src/Views/diagnostics/report.php` — блок скорости
-- `tests/Unit/PageSpeedServiceTest.php` — разбор сохранённого JSON-ответа
+- `src/Services/PageSpeedService.php` — запрос `runPagespeed` (mobile + desktop) с ключом `PAGESPEED_API_KEY`
+  из `.env`, тайм-аут константой, разбор ответа
+- `src/Services/Checks/SpeedCheck.php` — пороги (LCP 2,5 / 4 с, CLS 0,1 / 0,25, INP 200 / 500 мс,
+  TBT 200 / 600 мс, оценка < 50) → находки `speed`
+- `src/Services/DiagnosticRunner.php` — шаг `pagespeed`, итог в `summary_json.pagespeed`
+- `src/Services/ReportBuilder.php`, `src/Views/pages/diagnostic.php` — блок «Скорость»
+- `tests/Unit/PageSpeedServiceTest.php`, `tests/Unit/SpeedCheckTest.php` + сохранённый ответ
+  `tests/fixtures/pagespeed/`
 
 **Definition of Done:**
-- [ ] В отчёте видны оценки mobile / desktop и метрики
-- [ ] Без ключа или при ошибке API шаг `skipped` с причиной, ключ не пишется в лог
+- [ ] В отчёте видны оценки mobile / desktop и метрики; данные реальных пользователей подписаны отдельно
+- [ ] Без ключа или при ошибке API (429, тайм-аут) шаг `skipped` с причиной
+- [ ] Ключ не попадает в `app.log` и в сообщение шага (он в адресе запроса — проверить и ошибки curl)
 - [ ] Проверить `.docs/dod-global.md`

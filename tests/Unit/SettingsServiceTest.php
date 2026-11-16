@@ -72,6 +72,59 @@ final class SettingsServiceTest extends TestCase
         $this->assertSame([], $result['errors']);
     }
 
+    public static function validChromePaths(): array
+    {
+        return [
+            'пусто — по умолчанию' => [''],
+            'стандартный'          => [CHROME_DEFAULT_PATH],
+            'прямые слэши'         => ['C:/Program Files/Google/Chrome/Application/chrome.exe'],
+            'другой диск, EXE'     => ['D:\\Portable\\Chromium\\CHROME.EXE'],
+        ];
+    }
+
+    #[DataProvider('validChromePaths')]
+    public function testAcceptsValidChromePath(string $path): void
+    {
+        $this->assertNull(validateChromePath($path));
+    }
+
+    public static function invalidChromePaths(): array
+    {
+        return [
+            'относительный'  => ['chrome.exe'],
+            'без диска'      => ['\\Program Files\\chrome.exe'],
+            'не exe'         => ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.bat'],
+            'папка'          => ['C:\\Program Files\\Google\\Chrome\\Application\\'],
+            'кавычки'        => ['"C:\\Program Files\\chrome.exe"'],
+            'перевод строки' => ["C:\\chrome.exe\n"],
+            'амперсанд-пайп' => ['C:\\a|b\\chrome.exe'],
+            '256 символов'   => ['C:\\' . str_repeat('a', CHROME_PATH_MAX_LENGTH - 6) . '.exe'],
+        ];
+    }
+
+    #[DataProvider('invalidChromePaths')]
+    public function testRejectsInvalidChromePath(string $path): void
+    {
+        $this->assertIsString(validateChromePath($path));
+    }
+
+    public function testBrowserInputTrimsAndRejectsNonString(): void
+    {
+        $this->assertSame(
+            ['value' => CHROME_DEFAULT_PATH, 'error' => null],
+            validateBrowserSettingsInput(['chrome_path' => '  ' . CHROME_DEFAULT_PATH . ' '])
+        );
+        $this->assertIsString(validateBrowserSettingsInput(['chrome_path' => ['x']])['error']);
+        $this->assertNull(validateBrowserSettingsInput([])['error']);
+    }
+
+    public function testResolveChromePathFallsBackToDefault(): void
+    {
+        $this->assertSame(CHROME_DEFAULT_PATH, resolveChromePath(null));
+        $this->assertSame(CHROME_DEFAULT_PATH, resolveChromePath('  '));
+        $this->assertSame('D:\\Chrome\\chrome.exe', resolveChromePath('D:\\Chrome\\chrome.exe'));
+    }
+
     public function testMaskSecretEmptyIsNotSet(): void
     {
         $this->assertNull(maskSecret(''));

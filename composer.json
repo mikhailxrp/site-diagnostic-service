@@ -11,6 +11,12 @@
         "test": "phpunit"
     },
     "config": {
+        "platform": {
+            "php": "8.3.6"
+        },
         "sort-packages": true
+    },
+    "require": {
+        "chrome-php/chrome": "^1.16"
     }
 }

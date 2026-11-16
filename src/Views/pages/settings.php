@@ -3,10 +3,11 @@
 declare(strict_types=1);
 
 /**
- * Настройки: модели RouterAI (форма) и ключи API из .env (только просмотр).
+ * Настройки: модели RouterAI (форма), ключи API из .env (только просмотр), путь к Chrome (форма).
  * Ожидает: $title, $activeMenu, $modelFields (ключ → label, hint), $values (ключ → значение),
  * $errors (ключ → текст ошибки), $isEmpty (модели ещё не сохранялись),
- * $envKeys (list: name, label, value; value = null — не задан).
+ * $envKeys (list: name, label, value; value = null — не задан),
+ * $chromePath (сохранённый или введённый путь), $chromeError (?string), $chromeDefault (путь по умолчанию).
  */
 
 render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
@@ -89,6 +90,39 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                             Значения меняются только в файле <code>.env</code> в корне проекта.
                         </p>
                     </div>
+                </section>
+                <section class="card mt-3" aria-labelledby="settings-browser-title">
+                    <form method="post" action="/settings/browser" novalidate>
+                        <?= csrfField() ?>
+                        <div class="card-header">
+                            <h2 class="card-title" id="settings-browser-title">Браузер</h2>
+                        </div>
+                        <div class="card-body">
+                            <label class="form-label" for="setting-chrome-path">Путь к Chrome</label>
+                            <input type="text"
+                                   class="form-control form-control-lg<?= $chromeError !== null ? ' is-invalid' : '' ?>"
+                                   id="setting-chrome-path"
+                                   name="chrome_path"
+                                   value="<?= e($chromePath) ?>"
+                                   maxlength="<?= e(CHROME_PATH_MAX_LENGTH) ?>"
+                                   placeholder="<?= e($chromeDefault) ?>"
+                                   autocomplete="off"
+                                   spellcheck="false"
+                                   aria-describedby="setting-chrome-path-hint<?= $chromeError !== null ? ' setting-chrome-path-error' : '' ?>"
+                                   <?= $chromeError !== null ? 'aria-invalid="true"' : '' ?>>
+                            <?php if ($chromeError !== null) : ?>
+                                <div class="invalid-feedback" id="setting-chrome-path-error"><?= e($chromeError) ?></div>
+                            <?php endif; ?>
+                            <small class="form-hint" id="setting-chrome-path-hint">
+                                Пусто — путь по умолчанию: <code class="text-break"><?= e($chromeDefault) ?></code>.
+                                Нужен для проверки страниц в браузере без окна.
+                            </small>
+                        </div>
+                        <div class="card-footer d-flex flex-wrap justify-content-end gap-2">
+                            <button type="submit" class="btn btn-primary btn-lg" name="action" value="save">Сохранить</button>
+                            <button type="submit" class="btn btn-lg" name="action" value="check">Проверить Chrome</button>
+                        </div>
+                    </form>
                 </section>
             </div>
         </div>

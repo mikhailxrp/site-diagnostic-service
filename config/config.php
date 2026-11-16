@@ -12,6 +12,11 @@ define('ROOT_PATH', dirname(__DIR__));
 
 require_once ROOT_PATH . '/src/Core/functions.php';
 
+// Composer-пакеты (chrome-php/chrome). Без vendor/ сайт работает, шаг браузера пропускается с причиной.
+if (is_file(ROOT_PATH . '/vendor/autoload.php')) {
+    require_once ROOT_PATH . '/vendor/autoload.php';
+}
+
 loadEnv(ROOT_PATH . '/.env');
 
 define('APP_NAME', env('APP_NAME', 'Site Diagnostics'));

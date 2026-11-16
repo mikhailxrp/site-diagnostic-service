@@ -17,6 +17,7 @@ return [
     ],
     'POST' => [
         '/settings'                => ['SettingsController', 'save'],
+        '/settings/browser'        => ['SettingsController', 'saveBrowser'],
         '/diagnostics'             => ['DiagnosticController', 'store'],
         '/diagnostics/{id}/delete' => ['HistoryController', 'delete'],
     ],

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Логика настроек без БД: список ключей, проверка названий моделей, маскировка ключей из .env.
+ * Логика настроек без БД: список ключей, проверка названий моделей и пути к Chrome, маскировка ключей из .env.
  */
 
 const MODEL_NAME_MAX_LENGTH = 150; // как ai_results.model VARCHAR(150)
@@ -29,6 +29,13 @@ const SETTINGS_MODEL_FIELDS = [
         'hint'  => 'Сводка по всем находкам диагностики.',
     ],
 ];
+
+/** Путь к Chrome: настройка `chrome_path`, пустая — путь по умолчанию */
+const CHROME_PATH_SETTING    = 'chrome_path';
+const CHROME_DEFAULT_PATH    = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME_PATH_MAX_LENGTH = 255;
+// абсолютный путь Windows к .exe: «C:\…\chrome.exe» или «C:/…/chrome.exe»; без кавычек, <>|?* и управляющих символов
+const CHROME_PATH_PATTERN    = '/^[A-Za-z]:[\\\\\/][^"<>|?*\x00-\x1F]*\.exe$/iD';
 
 /** Переменные .env, которые показываются на странице: имя → [подпись, секрет ли] */
 const SETTINGS_ENV_KEYS = [
@@ -76,6 +83,48 @@ function validateSettingsInput(array $input): array
     }
 
     return ['values' => $values, 'errors' => $errors];
+}
+
+/**
+ * Пустой путь допустим: используется CHROME_DEFAULT_PATH. Есть ли файл, проверяет «Проверить Chrome», а не форма.
+ *
+ * @return ?string текст ошибки или null, если путь корректен
+ */
+function validateChromePath(string $path): ?string
+{
+    if ($path === '') {
+        return null;
+    }
+    if (mb_strlen($path) > CHROME_PATH_MAX_LENGTH) {
+        return 'Не длиннее ' . CHROME_PATH_MAX_LENGTH . ' символов.';
+    }
+    if (preg_match(CHROME_PATH_PATTERN, $path) !== 1) {
+        return 'Укажите полный путь к файлу .exe, например ' . CHROME_DEFAULT_PATH;
+    }
+    return null;
+}
+
+/**
+ * Поле `chrome_path` из формы: обрезка пробелов и проверка.
+ *
+ * @return array{value: string, error: ?string}
+ */
+function validateBrowserSettingsInput(array $input): array
+{
+    $raw = $input[CHROME_PATH_SETTING] ?? '';
+    $value = is_string($raw) ? trim($raw) : '';
+
+    return ['value' => $value, 'error' => is_string($raw) ? validateChromePath($value) : 'Укажите путь строкой.'];
+}
+
+/**
+ * Путь, с которым запускается Chrome: сохранённый или путь по умолчанию.
+ */
+function resolveChromePath(?string $saved): string
+{
+    $saved = trim((string) $saved);
+
+    return $saved !== '' ? $saved : CHROME_DEFAULT_PATH;
 }
 
 /**
