@@ -12,6 +12,7 @@ require_once ROOT_PATH . '/src/Models/DiagnosticModel.php';
 require_once ROOT_PATH . '/src/Models/FindingModel.php';
 require_once ROOT_PATH . '/src/Models/PageModel.php';
 require_once ROOT_PATH . '/src/Models/StackModel.php';
+require_once ROOT_PATH . '/src/Models/ScreenshotModel.php';
 require_once ROOT_PATH . '/src/Models/SettingsModel.php';
 require_once ROOT_PATH . '/src/Services/HttpClient.php';
 require_once ROOT_PATH . '/src/Services/SettingsService.php';
@@ -279,10 +280,17 @@ function runBrowserStep(array $context): array
     try {
         foreach ($selection['open'] as $page) {
             foreach (BROWSER_VIEWPORT_WIDTHS as $width) {
-                $loads[] = openBrowserPage($session['browser'], $page['url'], $width) + [
+                $load = openBrowserPage(
+                    $session['browser'],
+                    $page['url'],
+                    $width,
+                    BROWSER_PAGE_TIMEOUT_MS,
+                    $page['page_id'] !== null
+                ) + [
                     'types'   => $page['types'],
                     'page_id' => $page['page_id'],
                 ];
+                $loads[] = storeLoadScreenshot($load, $diagnosticId);
                 touchDiagnosticHeartbeat($diagnosticId);
             }
         }
@@ -312,26 +320,59 @@ function runBrowserStep(array $context): array
             $loads,
             count($selection['blocked']),
             $browserFindings['js_errors'],
-            $browserFindings['failed_requests']
+            $browserFindings['failed_requests'],
+            count(array_filter(array_column($loads, 'screenshot_id')))
         ),
         'facts'    => [
             'loads'    => array_map(static fn (array $load): array => [
-                'url'     => $load['url'],
-                'width'   => $load['width'],
-                'status'  => $load['status'],
-                'dom_ms'  => $load['dom_ms'],
-                'load_ms' => $load['load_ms'],
-                'error'   => $load['error'],
-                'types'   => $load['types'],
-                'page_id' => $load['page_id'],
-                'events'  => count($load['events']),
-                'dropped' => $load['dropped'],
+                'url'                  => $load['url'],
+                'width'                => $load['width'],
+                'status'               => $load['status'],
+                'dom_ms'               => $load['dom_ms'],
+                'load_ms'              => $load['load_ms'],
+                'error'                => $load['error'],
+                'types'                => $load['types'],
+                'page_id'              => $load['page_id'],
+                'events'               => count($load['events']),
+                'dropped'              => $load['dropped'],
+                'screenshot_id'        => $load['screenshot_id'] ?? null,
+                'screenshot_truncated' => $load['screenshot_truncated'] ?? false,
+                'screenshot_error'     => $load['screenshot_error'] ?? null,
             ], $loads),
             'blocked'  => $selection['blocked'],
             'rejected' => $browserFindings['rejected'],
         ],
         'findings' => $browserFindings['findings'],
     ];
+}
+
+/**
+ * Сохраняет снимок загрузки (файлы + запись `screenshots`) и убирает двоичные данные из результата: в нём остаются
+ * `screenshot_id` и `screenshot_truncated`. Ошибка сохранения — `screenshot_error`, шаг продолжается.
+ *
+ * @param array<string, mixed> $load результат `openBrowserPage()` + `page_id`
+ * @return array<string, mixed>
+ */
+function storeLoadScreenshot(array $load, int $diagnosticId): array
+{
+    $screenshot = $load['screenshot'] ?? null;
+    unset($load['screenshot']);
+    if (!is_array($screenshot) || $load['page_id'] === null) {
+        return $load;
+    }
+
+    $filePath = buildScreenshotFilePath($diagnosticId, (int) $load['page_id'], (int) $load['width']);
+    try {
+        saveScreenshotFiles($filePath, $screenshot['image'], $screenshot['thumbnail']);
+        $load['screenshot_id'] = insertScreenshot($diagnosticId, (int) $load['page_id'], (int) $load['width'], $filePath);
+        $load['screenshot_truncated'] = $screenshot['truncated'];
+    } catch (Throwable $e) {
+        logWarning('Скриншот не сохранён', ['diagnostic_id' => $diagnosticId, 'file' => $filePath,
+            'error' => $e->getMessage()]);
+        $load['screenshot_error'] = 'не сохранён: ' . $e->getMessage();
+    }
+
+    return $load;
 }
 
 /**

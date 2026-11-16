@@ -10,6 +10,7 @@ require_once ROOT_PATH . '/src/Models/DiagnosticModel.php';
 require_once ROOT_PATH . '/src/Models/FindingModel.php';
 require_once ROOT_PATH . '/src/Models/PageModel.php';
 require_once ROOT_PATH . '/src/Models/StackModel.php';
+require_once ROOT_PATH . '/src/Models/ScreenshotModel.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticRunner.php';
 require_once ROOT_PATH . '/src/Services/JobLauncher.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
@@ -179,7 +180,8 @@ final class DiagnosticController
                 $diagnostic,
                 getFindingsByDiagnostic($diagnosticId),
                 getStackItemsByDiagnostic($diagnosticId),
-                getCheckedPagesByDiagnostic($diagnosticId)
+                getCheckedPagesByDiagnostic($diagnosticId),
+                getScreenshotsByDiagnostic($diagnosticId)
             );
         } catch (Throwable $e) {
             logException($e, ['diagnostic_id' => $diagnosticId]);

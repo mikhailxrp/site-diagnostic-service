@@ -218,6 +218,57 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame(REPORT_PAGE_BLOCKED_LABEL, $report['blockedBadge']['label']);
     }
 
+    public function testScreenshotsAreShownInPageRowsSortedByWidth(): void
+    {
+        // Главная и каталог — один адрес: снимки сделаны на главную, видны в обеих строках
+        $pages = [
+            ['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start',
+                'http_code' => 200, 'response_ms' => 120, 'blocked' => 0],
+            ['id' => 2, 'url' => 'https://SHOP.ru/#top', 'page_type' => 'category', 'found_by' => 'cms_pattern',
+                'http_code' => 200, 'response_ms' => 90, 'blocked' => 0],
+            ['id' => 3, 'url' => 'https://shop.ru/item/', 'page_type' => 'product', 'found_by' => 'manual',
+                'http_code' => 200, 'response_ms' => 80, 'blocked' => 0],
+        ];
+        $screenshots = [
+            ['id' => 11, 'page_id' => 1, 'viewport_width' => 1366],
+            ['id' => 12, 'page_id' => 1, 'viewport_width' => 360],
+            ['id' => 13, 'page_id' => 1, 'viewport_width' => 768],
+        ];
+
+        $rows = array_column(buildReport($this->diagnostic(), [], [], $pages, $screenshots)['pages'], null, 'type');
+
+        $home = $rows['home']['screenshots'];
+        $this->assertSame([360, 768, 1366], array_column($home, 'width'));
+        $this->assertSame('Главная, 360 px', $home[0]['alt']);
+        $this->assertSame('Главная, 360 px, миниатюра', $home[0]['thumbAlt']);
+        $this->assertSame('360 px', $home[0]['caption']);
+        $this->assertSame('/screenshots/12', $home[0]['url']);
+        $this->assertSame('/screenshots/12/thumb', $home[0]['thumbUrl']);
+
+        $category = $rows['category']['screenshots'];
+        $this->assertSame(['/screenshots/12', '/screenshots/13', '/screenshots/11'], array_column($category, 'url'));
+        $this->assertSame('Категория, 768 px', $category[1]['alt']);
+        $this->assertNotSame($home[0]['modalId'], $category[0]['modalId'], 'id модальных окон не повторяются');
+
+        $this->assertSame([], $rows['product']['screenshots']);
+        $this->assertSame(REPORT_SCREENSHOTS_EMPTY, $rows['product']['screenshotsEmpty']);
+        $this->assertNull($rows['product']['screenshotsNote']);
+    }
+
+    public function testSkippedBrowserStepExplainsMissingScreenshots(): void
+    {
+        $diagnostic = $this->diagnostic('done', [
+            $this->step('browser', 'skipped', 'Пропущено: Chrome недоступен — файл не найден'),
+        ]);
+        $pages = [['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start',
+            'http_code' => 200, 'response_ms' => 120, 'blocked' => 0]];
+
+        $row = buildReport($diagnostic, [], [], $pages)['pages'][0];
+
+        $this->assertSame([], $row['screenshots']);
+        $this->assertStringContainsString('Chrome недоступен', (string) $row['screenshotsNote']);
+    }
+
     public function testHomeBlockedReplacesPossibleProtectionWarning(): void
     {
         $diagnostic = $this->diagnostic();

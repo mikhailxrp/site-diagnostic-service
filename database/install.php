@@ -145,6 +145,23 @@ $tables = [
                 REFERENCES diagnostics (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         SQL,
+
+    // Фаза 3: скриншоты страниц; файлы — в storage/screenshots/, file_path — относительно этой папки
+    'screenshots' => <<<SQL
+        CREATE TABLE IF NOT EXISTS screenshots (
+            id             INT NOT NULL AUTO_INCREMENT,
+            diagnostic_id  INT NOT NULL,
+            page_id        INT NOT NULL,
+            viewport_width SMALLINT UNSIGNED NOT NULL,
+            file_path      VARCHAR(255) NOT NULL,
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            CONSTRAINT fk_screenshots_diagnostic FOREIGN KEY (diagnostic_id)
+                REFERENCES diagnostics (id) ON DELETE CASCADE,
+            CONSTRAINT fk_screenshots_page FOREIGN KEY (page_id)
+                REFERENCES checked_pages (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        SQL,
 ];
 
 // ─── Установка ─────────────────────────────────────────────────────────────────

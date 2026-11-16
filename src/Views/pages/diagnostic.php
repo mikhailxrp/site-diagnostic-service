@@ -231,6 +231,8 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                                                 </div>
                                                                 <?php if ($page['blocked'] !== null) : ?>
                                                                     <div class="text-secondary small text-break"><?= e($page['blocked']) ?></div>
+                                                                <?php else : ?>
+                                                                    <?php render('components/screenshot-gallery', ['gallery' => $page]); ?>
                                                                 <?php endif; ?>
                                                             <?php else : ?>
                                                                 <div class="text-secondary small text-break"><?= e($page['reason']) ?></div>

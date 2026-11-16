@@ -101,6 +101,18 @@ final class BrowserServiceTest extends TestCase
         );
     }
 
+    public function testStepMessageCountsScreenshotsOfOpenedLoads(): void
+    {
+        $opened = ['url' => 'https://shop.test/', 'status' => BROWSER_PAGE_OPENED];
+        $timeout = ['url' => 'https://shop.test/', 'status' => BROWSER_PAGE_TIMEOUT];
+
+        $this->assertSame(
+            'Открыто в браузере: 1 из 2 страниц (2 из 3 загрузок); ошибок JS: 0; упавших запросов: 0; '
+                . 'скриншотов: 1 из 2; пропущено (защита от ботов): 1',
+            buildBrowserStepMessage([$opened, $timeout, $opened], 1, 0, 0, 1)
+        );
+    }
+
     public function testStepMessageCountsPageOpenedOnSomeWidths(): void
     {
         $opened = ['url' => 'https://shop.test/', 'status' => BROWSER_PAGE_OPENED];

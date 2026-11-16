@@ -13,11 +13,13 @@ declare(strict_types=1);
 
 use HeadlessChromium\Browser;
 use HeadlessChromium\BrowserFactory;
+use HeadlessChromium\Clip;
 use HeadlessChromium\Communication\Message;
 use HeadlessChromium\Exception\OperationTimedOut;
 use HeadlessChromium\Page;
 
 require_once ROOT_PATH . '/src/Services/Checks/BrowserConsoleCheck.php';
+require_once ROOT_PATH . '/src/Services/ScreenshotService.php';
 
 const BROWSER_STARTUP_TIMEOUT_SECONDS = 30;    // запуск Chrome воркером
 const BROWSER_CHECK_TIMEOUT_SECONDS   = 15;    // «Проверить Chrome» из веба: меньше max_execution_time запроса
@@ -131,13 +133,19 @@ function selectBrowserPages(array $pages): array
 
 /**
  * «Открыто в браузере: 4 из 5 страниц (12 загрузок); не открылось: 1; ошибок JS: 3; упавших запросов: 2;
- * пропущено (защита от ботов): 1». Страница открыта, если открылась хотя бы на одной ширине; если открылись не все
- * загрузки — «(11 из 12 загрузок)».
+ * скриншотов: 12 из 12; пропущено (защита от ботов): 1». Страница открыта, если открылась хотя бы на одной ширине;
+ * если открылись не все загрузки — «(11 из 12 загрузок)». Скриншоты считаются от открывшихся загрузок
+ * (`$screenshots = null` — снимки не делались, части нет).
  *
  * @param list<array{url: string, status: string}> $loads результаты `openBrowserPage()`
  */
-function buildBrowserStepMessage(array $loads, int $blocked, int $jsErrors = 0, int $failedRequests = 0): string
-{
+function buildBrowserStepMessage(
+    array $loads,
+    int $blocked,
+    int $jsErrors = 0,
+    int $failedRequests = 0,
+    ?int $screenshots = null
+): string {
     $pages = [];
     $openedLoads = 0;
     foreach ($loads as $load) {
@@ -157,6 +165,9 @@ function buildBrowserStepMessage(array $loads, int $blocked, int $jsErrors = 0, 
         $message .= "; не открылось: {$failed}";
     }
     $message .= "; ошибок JS: {$jsErrors}; упавших запросов: {$failedRequests}";
+    if ($screenshots !== null) {
+        $message .= "; скриншотов: {$screenshots} из {$openedLoads}";
+    }
     if ($blocked > 0) {
         $message .= "; пропущено (защита от ботов): {$blocked}";
     }
@@ -323,12 +334,20 @@ function getBrowserVersion(Browser $browser): ?string
  * Сетевая ошибка (`net::ERR_NAME_NOT_RESOLVED` и т. п.) — `error`: Chrome показал бы свою страницу ошибки, и
  * `waitForNavigation()` из `chrome-php` счёл бы её загруженной. Не бросает исключений: итог — в результате.
  * События DevTools сводятся `applyBrowserEvent()`; пришедшие после ожидания не учитываются.
+ * `$capture` — открывшаяся страница снимается до закрытия вкладки (`captureBrowserScreenshots()`): итог в
+ * `screenshot`, ошибка снимка — в `screenshot_error` (загрузка при этом остаётся открытой).
  *
  * @return array{url: string, width: int, status: string, dom_ms: ?int, load_ms: ?int, error: ?string,
- *               events: list<array<string, mixed>>, dropped: int}
+ *               events: list<array<string, mixed>>, dropped: int,
+ *               screenshot?: array{image: string, thumbnail: string, truncated: bool}, screenshot_error?: string}
  */
-function openBrowserPage(Browser $browser, string $url, int $width = BROWSER_WINDOW_WIDTH, int $timeoutMs = BROWSER_PAGE_TIMEOUT_MS): array
-{
+function openBrowserPage(
+    Browser $browser,
+    string $url,
+    int $width = BROWSER_WINDOW_WIDTH,
+    int $timeoutMs = BROWSER_PAGE_TIMEOUT_MS,
+    bool $capture = false
+): array {
     $page = null;
     $state = createBrowserEventState(null);
     $collecting = true;
@@ -350,6 +369,14 @@ function openBrowserPage(Browser $browser, string $url, int $width = BROWSER_WIN
         $page->setDeviceMetricsOverride(buildViewportOverride($width))->await(BROWSER_COMMAND_TIMEOUT_MS);
 
         $result = array_merge($result, navigateBrowserPage($page, $url, $timeoutMs));
+        $collecting = false;
+        if ($capture && $result['status'] === BROWSER_PAGE_OPENED) {
+            try {
+                $result['screenshot'] = captureBrowserScreenshots($page, $width);
+            } catch (Throwable $e) {
+                $result['screenshot_error'] = $e->getMessage() !== '' ? $e->getMessage() : get_class($e);
+            }
+        }
     } catch (Throwable $e) {
         $result['status'] = BROWSER_PAGE_ERROR;
         $result['error'] = $e->getMessage() !== '' ? $e->getMessage() : get_class($e);
@@ -365,6 +392,38 @@ function openBrowserPage(Browser $browser, string $url, int $width = BROWSER_WIN
     }
 
     return $result + ['events' => $state['events'], 'dropped' => $state['dropped']];
+}
+
+/**
+ * Снимок всей страницы (высота — по содержимому, с пределом SCREENSHOT_MAX_HEIGHT_PX) и миниатюра её верха,
+ * уменьшенная самим Chrome (`clip.scale`): без раскодирования большого снимка в PHP. JPEG, двоичные данные.
+ *
+ * @return array{image: string, thumbnail: string, truncated: bool}
+ */
+function captureBrowserScreenshots(Page $page, int $width): array
+{
+    $contentSize = $page->getLayoutMetrics()->await(BROWSER_COMMAND_TIMEOUT_MS)->getCssContentSize();
+    $clip = buildScreenshotClip($width, (float) ($contentSize['height'] ?? 0), BROWSER_WINDOW_HEIGHT);
+    $thumbClip = buildThumbnailClip($clip);
+
+    $image = $page->screenshot([
+        'format'                => 'jpeg',
+        'quality'               => SCREENSHOT_JPEG_QUALITY,
+        'captureBeyondViewport' => true,
+        'clip'                  => new Clip(0, 0, $clip['width'], $clip['height']),
+    ])->getBase64(SCREENSHOT_CAPTURE_TIMEOUT_MS);
+    $thumbnail = $page->screenshot([
+        'format'                => 'jpeg',
+        'quality'               => SCREENSHOT_THUMB_JPEG_QUALITY,
+        'captureBeyondViewport' => true,
+        'clip'                  => new Clip(0, 0, $thumbClip['width'], $thumbClip['height'], $thumbClip['scale']),
+    ])->getBase64(SCREENSHOT_CAPTURE_TIMEOUT_MS);
+
+    return [
+        'image'     => (string) base64_decode($image, true),
+        'thumbnail' => (string) base64_decode($thumbnail, true),
+        'truncated' => $clip['truncated'],
+    ];
 }
 
 /**

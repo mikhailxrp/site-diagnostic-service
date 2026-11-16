@@ -9,6 +9,7 @@ declare(strict_types=1);
  */
 
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
+require_once ROOT_PATH . '/src/Services/FindingFactory.php';
 
 /** Статусы диагностики, для которых строится отчёт; при `failed` — частичный (то, что успело собраться) */
 const REPORT_STATUSES         = ['done', 'failed'];
@@ -115,6 +116,15 @@ const REPORT_PAGE_BLOCKED_REASON   = 'Вместо страницы ответи
 const REPORT_PAGE_BLOCKED_DETAIL   = ' Признак: %s.';
 const REPORT_BADGE_BLOCKED         = 'bg-orange-lt';
 
+/** Скриншоты в строке страницы: файлы отдаёт ScreenshotController */
+const REPORT_SCREENSHOT_URL        = '/screenshots/%d';
+const REPORT_SCREENSHOT_THUMB_URL  = '/screenshots/%d/thumb';
+const REPORT_SCREENSHOT_ALT        = '%s, %d px';
+const REPORT_SCREENSHOT_THUMB_ALT  = '%s, %d px, миниатюра';
+const REPORT_SCREENSHOT_MODAL_ID   = 'screenshot-%s-%d'; // тип в id: один снимок бывает в двух строках
+const REPORT_SCREENSHOTS_EMPTY     = 'Скриншотов нет.';
+const REPORT_BROWSER_STEP_CODE     = 'browser';
+
 /** Группа «По страницам» для находок без страницы (SSL, стек и т. п.) */
 const REPORT_NO_PAGE_GROUP_TITLE = 'Сайт целиком';
 const REPORT_PAGE_TYPES_SEPARATOR = ', ';
@@ -162,12 +172,13 @@ const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNES
  * @param list<array<string, mixed>> $findings   из getFindingsByDiagnostic()
  * @param list<array<string, mixed>> $stackItems из getStackItemsByDiagnostic()
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
+ * @param list<array<string, mixed>> $screenshots из getScreenshotsByDiagnostic()
  * @return array{partial: bool, productUrl: ?string, summary: ?array, pages: list<array>, findingCount: int,
  *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
  *               stackGroups: list<array>, databases: list<array>, databasesStale: bool, databasesWarning: string,
  *               uncheckedSteps: list<array>}
  */
-function buildReport(array $diagnostic, array $findings, array $stackItems, array $pages): array
+function buildReport(array $diagnostic, array $findings, array $stackItems, array $pages, array $screenshots = []): array
 {
     $partial = in_array((string) $diagnostic['status'], REPORT_PARTIAL_STATUSES, true);
     $summary = decodeReportSummary($diagnostic['summary_json'] ?? null);
@@ -181,7 +192,13 @@ function buildReport(array $diagnostic, array $findings, array $stackItems, arra
             ? (string) $diagnostic['product_url']
             : null,
         'summary'           => buildReportSummary($summary, findHomeBlockedReason($pages, $blocked)),
-        'pages'             => buildReportPages($pages, $summary['pages'] ?? null, $blocked),
+        'pages'             => buildReportPages(
+            $pages,
+            $summary['pages'] ?? null,
+            $blocked,
+            buildPageScreenshotMap($screenshots, $pageUrls),
+            findBrowserStepNote($diagnostic['steps'] ?? [])
+        ),
         'findingCount'      => count($findings),
         'findingGroups'     => buildReportFindingGroups($findings, $pageUrls),
         'findingPageGroups' => buildReportFindingsByPage($findings, $pages, $blocked),
@@ -485,11 +502,19 @@ function buildReportRedirects(array $redirects): array
  * @param list<array<string, mixed>> $pages      строки `checked_pages`
  * @param mixed                      $crawlFacts `summary_json.pages`: `missing` — тип → причина
  * @param array<int, string>         $blocked    id страницы → причина «не удалось проверить» (`buildBlockedPageReasons()`)
+ * @param array<string, list<array{id: int, width: int}>> $screenshots адрес страницы → снимки (`buildPageScreenshotMap()`)
+ * @param ?string                    $browserNote почему снимков нет (сообщение пропущенного шага `browser`)
  * @return list<array{type: string, label: string, found: bool, url: ?string, status: string, badgeClass: string,
- *                    foundBy: ?string, responseMs: ?int, reason: ?string, blocked: ?string}>
+ *                    foundBy: ?string, responseMs: ?int, reason: ?string, blocked: ?string,
+ *                    screenshots: list<array>, screenshotsEmpty: string, screenshotsNote: ?string}>
  */
-function buildReportPages(array $pages, mixed $crawlFacts, array $blocked = []): array
-{
+function buildReportPages(
+    array $pages,
+    mixed $crawlFacts,
+    array $blocked = [],
+    array $screenshots = [],
+    ?string $browserNote = null
+): array {
     $byType = [];
     foreach ($pages as $page) {
         if (isset($page['page_type'])) {
@@ -517,6 +542,13 @@ function buildReportPages(array $pages, mixed $crawlFacts, array $blocked = []):
                 'responseMs' => isset($page['response_ms']) ? (int) $page['response_ms'] : null,
                 'reason'     => null,
                 'blocked'    => isset($page['id']) ? ($blocked[(int) $page['id']] ?? null) : null,
+                'screenshots'      => buildReportScreenshots(
+                    $screenshots[normalizeFindingLocation((string) $page['url'])] ?? [],
+                    $type,
+                    $label
+                ),
+                'screenshotsEmpty' => REPORT_SCREENSHOTS_EMPTY,
+                'screenshotsNote'  => $browserNote,
             ];
             continue;
         }
@@ -536,10 +568,80 @@ function buildReportPages(array $pages, mixed $crawlFacts, array $blocked = []):
             'responseMs' => null,
             'reason'     => is_string($missing[$type] ?? null) ? $missing[$type] : REPORT_PAGE_NOT_FOUND_REASON,
             'blocked'    => null,
+            'screenshots'      => [],
+            'screenshotsEmpty' => REPORT_SCREENSHOTS_EMPTY,
+            'screenshotsNote'  => null,
         ];
     }
 
     return $rows;
+}
+
+/**
+ * Снимки по адресу страницы (`normalizeFindingLocation()`): один адрес может быть и главной, и каталогом —
+ * снимки сделаны один раз (на первую страницу), а показываются в обеих строках.
+ *
+ * @param list<array<string, mixed>> $screenshots строки `screenshots` (id, page_id, viewport_width)
+ * @param array<int, string>         $pageUrls    id страницы → адрес (`buildPageUrlMap()`)
+ * @return array<string, list<array{id: int, width: int}>>
+ */
+function buildPageScreenshotMap(array $screenshots, array $pageUrls): array
+{
+    $map = [];
+    foreach ($screenshots as $screenshot) {
+        $url = $pageUrls[(int) $screenshot['page_id']] ?? null;
+        if ($url !== null) {
+            $map[normalizeFindingLocation($url)][] = [
+                'id'    => (int) $screenshot['id'],
+                'width' => (int) $screenshot['viewport_width'],
+            ];
+        }
+    }
+    foreach ($map as &$items) {
+        usort($items, static fn (array $a, array $b): int => $a['width'] <=> $b['width']);
+    }
+    unset($items);
+
+    return $map;
+}
+
+/**
+ * Готовые для View снимки строки страницы: адреса файла и миниатюры, подписи, `alt`, id модального окна.
+ *
+ * @param list<array{id: int, width: int}> $screenshots
+ * @return list<array{width: int, caption: string, url: string, thumbUrl: string, alt: string, thumbAlt: string,
+ *                    modalId: string}>
+ */
+function buildReportScreenshots(array $screenshots, string $type, string $label): array
+{
+    return array_map(static fn (array $screenshot): array => [
+        'width'    => $screenshot['width'],
+        'caption'  => $screenshot['width'] . ' px',
+        'url'      => sprintf(REPORT_SCREENSHOT_URL, $screenshot['id']),
+        'thumbUrl' => sprintf(REPORT_SCREENSHOT_THUMB_URL, $screenshot['id']),
+        'alt'      => sprintf(REPORT_SCREENSHOT_ALT, $label, $screenshot['width']),
+        'thumbAlt' => sprintf(REPORT_SCREENSHOT_THUMB_ALT, $label, $screenshot['width']),
+        'modalId'  => sprintf(REPORT_SCREENSHOT_MODAL_ID, $type, $screenshot['id']),
+    ], $screenshots);
+}
+
+/**
+ * Почему снимков нет: сообщение шага `browser`, если он пропущен или упал; иначе null.
+ *
+ * @param list<array<string, mixed>> $steps строки `diagnostic_steps`
+ */
+function findBrowserStepNote(array $steps): ?string
+{
+    foreach ($steps as $step) {
+        if (
+            ($step['step_code'] ?? null) === REPORT_BROWSER_STEP_CODE
+            && in_array((string) $step['status'], REPORT_UNCHECKED_STEP_STATUSES, true)
+        ) {
+            return isset($step['message']) && $step['message'] !== '' ? (string) $step['message'] : null;
+        }
+    }
+
+    return null;
 }
 
 /**

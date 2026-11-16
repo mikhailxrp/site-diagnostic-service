@@ -14,6 +14,8 @@ return [
         '/history'                 => ['HistoryController', 'index'],
         '/diagnostics/{id}'        => ['DiagnosticController', 'show'],
         '/diagnostics/{id}/status' => ['DiagnosticController', 'status'],
+        '/screenshots/{id}'        => ['ScreenshotController', 'show'],
+        '/screenshots/{id}/thumb'  => ['ScreenshotController', 'thumb'],
     ],
     'POST' => [
         '/settings'                => ['SettingsController', 'save'],

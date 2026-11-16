@@ -9,6 +9,7 @@ use Throwable;
 require_once ROOT_PATH . '/src/Models/DiagnosticModel.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
 require_once ROOT_PATH . '/src/Services/HistoryService.php';
+require_once ROOT_PATH . '/src/Services/ScreenshotService.php';
 
 /**
  * История диагностик: список с поиском и пагинацией, удаление.
@@ -74,6 +75,10 @@ final class HistoryController
             } elseif (in_array($status, HISTORY_UNDELETABLE_STATUSES, true) || !deleteDiagnostic($diagnosticId)) {
                 setFlash('error', 'Нельзя удалить: идёт проверка. Дождитесь её окончания.');
             } else {
+                // Записи `screenshots` удалены каскадом, файлы — здесь; не вышло — запись всё равно удалена
+                if (!deleteDiagnosticScreenshots($diagnosticId)) {
+                    logWarning('Папка скриншотов удалённой диагностики не удалена', ['diagnostic_id' => $diagnosticId]);
+                }
                 setFlash('success', 'Диагностика #' . $diagnosticId . ' удалена.');
             }
         } catch (Throwable $e) {
