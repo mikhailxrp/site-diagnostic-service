@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 /**
  * Шаг `stack` без БД: стек по главной из фактов шага `availability`, затем — только для найденных CMS
- * без известной версии — служебные файлы для версии. Сеть передаётся параметром (`$request`).
+ * без известной версии — служебные файлы для версии, а если версии всё ещё нет — отпечатки статических файлов
+ * (`fingerprints` в сигнатурах, OpenCart). Сеть передаётся параметром (`$request`).
  * Находок нет: устаревшие версии и уязвимости — Фаза 2.
  */
 
@@ -55,6 +56,29 @@ function runStackCheck(array $context, callable $request, ?array $signatures = n
         }
     }
 
+    $fingerprints = [];
+    foreach (listPlatformsWithoutVersion($items) as $platformKey) {
+        $known = loadVersionFingerprints((string) ($signatures['platforms'][$platformKey]['fingerprints'] ?? ''));
+        if ($known === null) {
+            continue;
+        }
+
+        $hashes = [];
+        $files = [];
+        foreach (buildFingerprintUrls($pageUrl, $known) as $file) {
+            $response = $request($file['url']);
+            $usable = ($response['status'] ?? null) === HTTP_STATUS_OK && empty($response['truncated']);
+            if ($usable) {
+                $hashes[$file['path']] = hashFingerprintBody((string) ($response['body'] ?? ''));
+            }
+            $files[] = ['url' => $file['url'], 'status' => $response['status'] ?? null, 'error' => $response['error'] ?? null];
+        }
+
+        $match = matchVersionFingerprints($known, $hashes);
+        $items = applyFingerprintVersion($items, $platformKey, $match);
+        $fingerprints[] = ['platform' => $platformKey, 'files' => $files] + $match;
+    }
+
     $items = finalizeStackItems($items);
 
     return [
@@ -63,6 +87,7 @@ function runStackCheck(array $context, callable $request, ?array $signatures = n
         'facts'    => [
             'items'   => $items,
             'probes'  => $probes,
+            'fingerprints' => $fingerprints,
             // Страница-заглушка защиты от ботов или обрезанный HTML — стек может быть неполным
             'limited' => !empty($home['possible_bot_protection']) || !empty($home['truncated']),
         ],

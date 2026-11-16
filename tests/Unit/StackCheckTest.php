@@ -107,6 +107,116 @@ final class StackCheckTest extends TestCase
         $this->assertSame([], $this->requested, 'у Битрикса нет служебных файлов с версией');
     }
 
+    /**
+     * Ответы сайта на OpenCart — настоящие файлы релиза 3.0.3.8.
+     *
+     * @param list<string> $paths файлы, которые сайт отдаёт; остальные — 404
+     */
+    private function opencartFiles(array $paths): array
+    {
+        $responses = [];
+        foreach ($paths as $path) {
+            $responses['https://shop.test/' . $path] = [
+                'status' => 200,
+                'body'   => (string) file_get_contents(self::FIXTURES . 'opencart-3.0.3.8/' . $path),
+            ];
+        }
+
+        return $responses;
+    }
+
+    public function testOpencartVersionFromFingerprints(): void
+    {
+        $result = runStackCheck($this->context('opencart'), $this->request($this->opencartFiles([
+            'admin/view/javascript/common.js',
+            'admin/view/stylesheet/stylesheet.css',
+            'catalog/view/javascript/common.js',
+            'catalog/view/theme/default/stylesheet/stylesheet.css',
+        ])));
+
+        $opencart = $this->find($result['facts']['items'], 'cms', 'OpenCart');
+        $this->assertSame('3.0.3.8', $opencart['version']);
+        $this->assertSame('high', $opencart['confidence']);
+        $this->assertContains('отпечатки файлов ядра (4) → 3.0.3.8', array_column($opencart['evidence'], 'detail'));
+        $this->assertStringStartsWith('OpenCart 3.0.3.8; ', $result['message']);
+        $this->assertCount(5, $this->requested, 'все файлы отпечатков, в том числе файл OpenCart 4');
+        $this->assertSame(['3.0.3.8'], $result['facts']['fingerprints'][0]['versions']);
+        $this->assertSame('opencart', $result['facts']['fingerprints'][0]['platform']);
+    }
+
+    public function testOpencartRangeGivesNoVersion(): void
+    {
+        $result = runStackCheck($this->context('opencart'), $this->request($this->opencartFiles([
+            'catalog/view/javascript/common.js',
+        ])));
+
+        $opencart = $this->find($result['facts']['items'], 'cms', 'OpenCart');
+        $this->assertNull($opencart['version'], 'файл один во всех 3.x — точную версию не угадываем');
+        $this->assertContains(
+            'отпечатки файлов ядра (1): 3.0.0.0–3.0.5.1 — точная версия не определена',
+            array_column($opencart['evidence'], 'detail')
+        );
+    }
+
+    public function testOpencartChangedOrClosedFilesGiveNoVersion(): void
+    {
+        $responses = $this->opencartFiles([]);
+        $responses['https://shop.test/admin/view/javascript/common.js'] = ['status' => 200, 'body' => 'изменён на сайте'];
+        $responses['https://shop.test/catalog/view/javascript/common.js'] = ['status' => 403, 'body' => 'Forbidden'];
+
+        $result = runStackCheck($this->context('opencart'), $this->request($responses));
+
+        $opencart = $this->find($result['facts']['items'], 'cms', 'OpenCart');
+        $this->assertNull($opencart['version']);
+        $this->assertNotContains('probe', array_column($opencart['evidence'], 'source'), 'ничего не узнано — признака нет');
+        $this->assertSame([], $result['facts']['fingerprints'][0]['matched']);
+    }
+
+    public function testOpencartTruncatedFileIsNotUsed(): void
+    {
+        $responses = $this->opencartFiles(['admin/view/javascript/common.js']);
+        $responses['https://shop.test/admin/view/javascript/common.js']['truncated'] = true;
+
+        $result = runStackCheck($this->context('opencart'), $this->request($responses));
+
+        $this->assertNull($this->find($result['facts']['items'], 'cms', 'OpenCart')['version']);
+    }
+
+    public function testVersionSourceIsKeptWhenEvidenceIsFull(): void
+    {
+        $base = ['key' => 'opencart', 'category' => 'cms', 'name' => 'OpenCart'];
+        $items = [];
+        for ($i = 1; $i <= STACK_EVIDENCE_MAX_ITEMS; $i++) {
+            $items = addStackSignal($items, $base, "url{$i}", STACK_WEIGHT_WEAK, 'url', "/catalog/view/{$i}.js");
+        }
+
+        $items = applyFingerprintVersion($items, 'opencart', ['versions' => ['3.0.3.3', '3.0.3.7'], 'matched' => ['a.js']]);
+
+        $evidence = finalizeStackItems($items)[0]['evidence'];
+        $this->assertCount(STACK_EVIDENCE_MAX_ITEMS, $evidence);
+        $this->assertSame('отпечатки файлов ядра (1): 3.0.3.3–3.0.3.7 — точная версия не определена', end($evidence)['detail']);
+    }
+
+    public function testNoFingerprintsWhenProbeGaveVersion(): void
+    {
+        $signatures = loadStackSignatures();
+        $signatures['platforms']['opencart']['probes'] = [['path' => 'version.txt', 'version' => '~(\d+(?:\.\d+)+)~']];
+
+        $result = runStackCheck($this->context('opencart'), $this->request([
+            'https://shop.test/version.txt' => ['status' => 200, 'body' => '4.0.2.3'],
+        ]), $signatures);
+
+        $this->assertSame(['https://shop.test/version.txt'], $this->requested, 'версия есть — отпечатки не нужны');
+        $this->assertSame([], $result['facts']['fingerprints']);
+    }
+
+    public function testNoFingerprintsForOtherCms(): void
+    {
+        $result = runStackCheck($this->context('bitrix'), $this->request());
+
+        $this->assertSame([], $result['facts']['fingerprints']);
+    }
+
     public function testProbeGivesVersionAndStopsAtFirstHit(): void
     {
         $html = '<link rel="stylesheet" href="/wp-content/themes/astra/style.css">'

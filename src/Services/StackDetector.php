@@ -11,6 +11,8 @@ declare(strict_types=1);
  * `signals` (ключ признака → вес; один и тот же признак не считается дважды), `evidence` (источник + деталь).
  */
 
+require_once ROOT_PATH . '/src/Services/VersionFingerprints.php';
+
 const STACK_SIGNATURES_FILE = ROOT_PATH . '/data/signatures.php';
 
 const STACK_WEIGHT_STRONG = 3; // мета generator, служебный файл с версией, явный заголовок сервера / CDN
@@ -632,9 +634,83 @@ function applyVersionProbe(array $items, string $platformKey, string $url, strin
     foreach ($items as $item) {
         if ($item['key'] === $platformKey) {
             $base = ['key' => $platformKey, 'category' => $item['category'], 'name' => $item['name']];
+            $items = makeRoomForStackEvidence($items, $base);
 
             return addStackSignal($items, $base, 'probe', STACK_WEIGHT_STRONG, 'probe', $url . ' → ' . $version, $version);
         }
+    }
+
+    return $items;
+}
+
+/**
+ * Источник версии (служебный файл, отпечатки) важнее пятого пути или cookie: если источников уже предел —
+ * последний уходит, чтобы в отчёте было видно, откуда версия.
+ *
+ * @param array<string, mixed> $base category, name
+ */
+function makeRoomForStackEvidence(array $items, array $base): array
+{
+    $id = stackItemId($base['category'], $base['name']);
+    if (isset($items[$id]) && count($items[$id]['evidence']) >= STACK_EVIDENCE_MAX_ITEMS) {
+        array_pop($items[$id]['evidence']);
+    }
+
+    return $items;
+}
+
+// ─── Отпечатки статических файлов для версии ──────────────────────────────────
+
+/**
+ * Адреса файлов отпечатков от корня сайта (пути — ключи отпечатков).
+ *
+ * @param array<string, array<string, list<string>>> $fingerprints путь → хэш → версии
+ * @return list<array{url: string, path: string}>
+ */
+function buildFingerprintUrls(string $baseUrl, array $fingerprints): array
+{
+    $parts = parse_url($baseUrl);
+    if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
+        return [];
+    }
+
+    $origin = strtolower($parts['scheme']) . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
+    $urls = [];
+    foreach (array_keys($fingerprints) as $path) {
+        $urls[] = ['url' => $origin . '/' . ltrim((string) $path, '/'), 'path' => (string) $path];
+    }
+
+    return $urls;
+}
+
+/**
+ * Итог отпечатков у найденной платформы: одна версия — сильный признак с версией (как служебный файл); несколько —
+ * признак без версии, диапазон — в источниках (лучше пропустить, чем ошибиться); узнанные файлы из разных
+ * релизов — без версии; ничего не узнано — без изменений.
+ *
+ * @param array{versions: list<string>, matched: list<string>} $match `matchVersionFingerprints()`
+ */
+function applyFingerprintVersion(array $items, string $platformKey, array $match): array
+{
+    if ($match['matched'] === []) {
+        return $items;
+    }
+
+    foreach ($items as $item) {
+        if ($item['key'] !== $platformKey) {
+            continue;
+        }
+
+        $base = ['key' => $platformKey, 'category' => $item['category'], 'name' => $item['name']];
+        $items = makeRoomForStackEvidence($items, $base);
+        $files = 'отпечатки файлов ядра (' . count($match['matched']) . ')';
+        $versions = $match['versions'];
+
+        return match (true) {
+            count($versions) === 1 => addStackSignal($items, $base, 'fingerprint', STACK_WEIGHT_STRONG, 'probe', "{$files} → {$versions[0]}", $versions[0]),
+            $versions !== []       => addStackSignal($items, $base, 'fingerprint', STACK_WEIGHT_WEAK, 'probe', "{$files}: " . formatVersionCandidates($versions) . ' — точная версия не определена'),
+            default                => addStackSignal($items, $base, 'fingerprint', STACK_WEIGHT_WEAK, 'probe', "{$files} из разных релизов — версия не определена"),
+        };
     }
 
     return $items;

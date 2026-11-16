@@ -17,6 +17,8 @@ declare(strict_types=1);
  *   `?ver=` — версия отдельного файла, поэтому флага нет);
  *   probes — служебные файлы для версии (только для найденной CMS): path от корня сайта, version — шаблон
  *   (группа 1 — версия) по ответу.
+ *   fingerprints — имя отпечатков в data/fingerprints/ (`<имя>.json`: путь файла → md5 → версии релизов); файлы
+ *   запрашиваются для найденной CMS без версии после probes, версия — только если совпадение однозначно.
  *
  * `server_names` — первое слово заголовка `Server` (нижний регистр) → название;
  * `cdn_server_values` — значения `Server`, которые означают CDN / защиту, а не веб-сервер;
@@ -82,6 +84,7 @@ return [
             'themes'   => ['~/catalog/view/theme/([^/?#]+)/~'],
             'plugins'  => ['~/extension/([^/?#]+)/catalog/~'],
             'plugin_ignore' => ['~^opencart$~'],
+            'fingerprints'  => 'opencart',
         ],
         'joomla' => [
             'name'      => 'Joomla',
