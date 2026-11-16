@@ -268,7 +268,8 @@ final class DiagnosticRunnerTest extends TestCase
     public function testStepsOrder(): void
     {
         $this->assertSame(
-            ['availability', 'stack', 'outdated', 'vulnerabilities', 'crawl', 'resources', 'seo', 'browser', 'pagespeed'],
+            ['availability', 'stack', 'outdated', 'vulnerabilities', 'crawl', 'resources', 'seo', 'browser', 'pagespeed',
+                'ai_problem'],
             array_column(getDiagnosticSteps(), 'code')
         );
     }

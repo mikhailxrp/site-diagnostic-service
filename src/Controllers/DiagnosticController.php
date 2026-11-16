@@ -11,6 +11,7 @@ require_once ROOT_PATH . '/src/Models/FindingModel.php';
 require_once ROOT_PATH . '/src/Models/PageModel.php';
 require_once ROOT_PATH . '/src/Models/StackModel.php';
 require_once ROOT_PATH . '/src/Models/ScreenshotModel.php';
+require_once ROOT_PATH . '/src/Models/AiResultModel.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticRunner.php';
 require_once ROOT_PATH . '/src/Services/JobLauncher.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
@@ -166,7 +167,7 @@ final class DiagnosticController
     }
 
     /**
-     * Отчёт из находок, стека и страниц. null — не удалось прочитать (ошибка в журнале), прогресс всё равно виден.
+     * Отчёт из находок, стека, страниц, скриншотов и ответов ИИ. null — не удалось прочитать (ошибка в журнале), прогресс всё равно виден.
      *
      * @param array<string, mixed> $diagnostic строка `diagnostics` + `steps`
      * @return array<string, mixed>|null
@@ -181,7 +182,8 @@ final class DiagnosticController
                 getFindingsByDiagnostic($diagnosticId),
                 getStackItemsByDiagnostic($diagnosticId),
                 getCheckedPagesByDiagnostic($diagnosticId),
-                getScreenshotsByDiagnostic($diagnosticId)
+                getScreenshotsByDiagnostic($diagnosticId),
+                getAiResultsByDiagnostic($diagnosticId)
             );
         } catch (Throwable $e) {
             logException($e, ['diagnostic_id' => $diagnosticId]);

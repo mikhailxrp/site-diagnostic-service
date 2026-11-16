@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Один элемент стека. Ожидает: $stackItem (элемент из buildReportStackItem()).
  */
 ?>
-<li class="list-group-item">
+<li class="list-group-item"<?php if ($stackItem['anchorId'] !== null) : ?> id="<?= e($stackItem['anchorId']) ?>"<?php endif; ?>>
     <div class="d-flex flex-wrap align-items-center gap-2">
         <span class="fw-medium text-break"><?= e($stackItem['name']) ?></span>
         <?php if ($stackItem['version'] !== null) : ?>

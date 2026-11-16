@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 /**
- * Одна находка отчёта. Ожидает: $finding (элемент из buildReportFinding()).
+ * Одна находка отчёта. Ожидает: $finding (элемент из buildReportFinding()); необязательно $withAnchor — вывести
+ * якорь для ссылок «Опирается на» (только в одном списке: id на странице не повторяются).
  */
+$withAnchor = ($withAnchor ?? false) && $finding['anchorId'] !== null;
 ?>
-<li class="list-group-item">
+<li class="list-group-item"<?php if ($withAnchor) : ?> id="<?= e($finding['anchorId']) ?>"<?php endif; ?>>
     <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
         <span class="badge <?= e($finding['badgeClass']) ?>"><?= e($finding['severityLabel']) ?></span>
         <span class="text-secondary small"><?= e($finding['categoryLabel']) ?></span>

@@ -105,6 +105,27 @@ final class FindingFactoryTest extends TestCase
         $this->assertNotSame($base, buildFingerprint('broken_resource', 'https://shop.ru/a.css', '500'));
     }
 
+    public function testAiFindingHasSourceResultIdAndEvidenceLinks(): void
+    {
+        $finding = makeAiFinding('hypothesis', 'Корзина  падает', 'Почему', 'critical', ['finding_ids' => [3]], 9);
+
+        $this->assertSame('ai', $finding['source']);
+        $this->assertSame(9, $finding['ai_result_id']);
+        $this->assertSame('critical', $finding['severity']);
+        $this->assertSame(['finding_ids' => [3]], $finding['evidence']);
+        $this->assertNull($finding['location']);
+        $this->assertSame(
+            makeAiFinding('hypothesis', ' корзина падает ', null, 'low', [], 1)['fingerprint'],
+            $finding['fingerprint']
+        );
+    }
+
+    public function testAiFindingRejectsUnknownSeverity(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        makeAiFinding('hypothesis', 'Гипотеза', null, 'катастрофа', [], 1);
+    }
+
     public function testNonUrlLocationIsOnlyTrimmed(): void
     {
         $this->assertSame('/var/www/Index.php', normalizeFindingLocation(' /var/www/Index.php '));

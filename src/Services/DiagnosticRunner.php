@@ -14,6 +14,7 @@ require_once ROOT_PATH . '/src/Models/PageModel.php';
 require_once ROOT_PATH . '/src/Models/StackModel.php';
 require_once ROOT_PATH . '/src/Models/ScreenshotModel.php';
 require_once ROOT_PATH . '/src/Models/SettingsModel.php';
+require_once ROOT_PATH . '/src/Models/AiResultModel.php';
 require_once ROOT_PATH . '/src/Services/HttpClient.php';
 require_once ROOT_PATH . '/src/Services/SettingsService.php';
 require_once ROOT_PATH . '/src/Services/BrowserService.php';
@@ -29,6 +30,8 @@ require_once ROOT_PATH . '/src/Services/Checks/OutdatedCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/VulnerabilityCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
+require_once ROOT_PATH . '/src/Services/AiClient.php';
+require_once ROOT_PATH . '/src/Services/Ai/ProblemAnalysis.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
 const STEP_MESSAGE_MAX_LENGTH = 1000; // как diagnostic_steps.message VARCHAR(1000)
@@ -60,6 +63,7 @@ function getDiagnosticSteps(): array
         ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
         ['code' => 'browser',      'title' => 'Проверка в браузере',     'handler' => 'runBrowserStep'],
         ['code' => 'pagespeed',    'title' => 'Скорость (PageSpeed)',    'handler' => 'runPageSpeedStep'],
+        ['code' => 'ai_problem',   'title' => 'Разбор проблемы (ИИ)',    'handler' => 'runAiProblemStep'],
     ];
 }
 
@@ -379,6 +383,51 @@ function runPageSpeedStep(array $context): array
     }
 
     return $result;
+}
+
+/**
+ * Шаг `ai_problem` с настоящей сетью и БД: жалоба и факты **из БД** (не из памяти воркера — так разбор можно
+ * перезапустить на сохранённой диагностике) → RouterAI → `ai_results` → гипотезы-находки с `ai_result_id`
+ * (сохраняет `runDiagnostic()`). Нет ключа → `skipped`; ошибка API или ответ не по схеме → исключение (`failed`),
+ * ответ уже записан в `ai_results`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runAiProblemStep(array $context): array
+{
+    $key = env('ROUTERAI_API_KEY', '');
+    $keyError = validateAiKey($key);
+    if ($keyError !== null) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => $keyError];
+    }
+
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    $summary = is_string($diagnostic['summary_json'] ?? null) ? json_decode($diagnostic['summary_json'], true) : null;
+
+    $analysis = runProblemAnalysis(
+        $context['diagnostic'],
+        [
+            'findings' => getFindingsByDiagnostic($diagnosticId),
+            'stack'    => getStackItemsByDiagnostic($diagnosticId),
+            'pages'    => getCheckedPagesByDiagnostic($diagnosticId),
+            'summary'  => is_array($summary) ? $summary : null,
+        ],
+        resolveModelSetting(getSetting(AI_PROBLEM_MODEL_SETTING)),
+        $key,
+        loadProblemPrompt(),
+        makeAiSender($key),
+        static fn (array $record): int => insertAiResult($diagnosticId, $record)
+    );
+    touchDiagnosticHeartbeat($diagnosticId);
+
+    return [
+        'status'   => STEP_STATUS_DONE,
+        'message'  => $analysis['message'],
+        'facts'    => ['ai_result_id' => $analysis['ai_result_id']],
+        'findings' => $analysis['findings'],
+    ];
 }
 
 /**

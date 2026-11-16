@@ -197,20 +197,47 @@ const REPORT_SPEED_FIELD_EMPTY    = 'У Google нет данных реальн�
 const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     | JSON_INVALID_UTF8_SUBSTITUTE;
 
+/** Якоря для ссылок «Опирается на»: находка (на вкладке «По серьёзности») и элемент стека */
+const REPORT_FINDING_ANCHOR = 'finding-%d';
+const REPORT_STACK_ANCHOR   = 'stack-%d';
+
+/** Блок «Разбор жалобы (ИИ)»: шаг `ai_problem`, ответ ИИ `problem`, находки `hypothesis` */
+const REPORT_AI_PROBLEM_STEP_CODE  = 'ai_problem';
+const REPORT_AI_PROBLEM_TASK       = 'problem';
+const REPORT_AI_HYPOTHESIS_CATEGORY = 'hypothesis';
+const REPORT_AI_STATE_DONE         = 'done';
+const REPORT_AI_STATE_FAILED       = 'failed';
+const REPORT_AI_STATE_SKIPPED      = 'skipped';
+const REPORT_AI_RESULT_ERROR       = 'error';
+const REPORT_AI_NOT_RUN_MESSAGE    = 'ИИ-анализ не выполнен.';
+const REPORT_AI_DATE_FORMAT        = 'd.m.Y H:i';
+const REPORT_AI_NO_TOKENS          = '—';
+const REPORT_AI_EVIDENCE_KEYS      = ['finding_ids', 'stack_ids'];
+
 /**
  * @param array<string, mixed>       $diagnostic строка `diagnostics` + `steps` (как из getDiagnosticWithSteps())
  * @param list<array<string, mixed>> $findings   из getFindingsByDiagnostic()
  * @param list<array<string, mixed>> $stackItems из getStackItemsByDiagnostic()
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
  * @param list<array<string, mixed>> $screenshots из getScreenshotsByDiagnostic()
+ * @param list<array<string, mixed>> $aiResults  из getAiResultsByDiagnostic()
  * @return array{partial: bool, productUrl: ?string, summary: ?array, pagespeed: ?array, pages: list<array>,
  *               findingCount: int,
  *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
  *               stackGroups: list<array>, databases: list<array>, databasesStale: bool, databasesWarning: string,
- *               uncheckedSteps: list<array>}
+ *               uncheckedSteps: list<array>, aiProblem: ?array}
  */
-function buildReport(array $diagnostic, array $findings, array $stackItems, array $pages, array $screenshots = []): array
-{
+function buildReport(
+    array $diagnostic,
+    array $findings,
+    array $stackItems,
+    array $pages,
+    array $screenshots = [],
+    array $aiResults = []
+): array {
+    // Находки ИИ — в своих карточках: в «Находках» только факты
+    $aiFindings = array_values(array_filter($findings, 'isReportAiFinding'));
+    $findings = array_values(array_filter($findings, static fn (array $finding): bool => !isReportAiFinding($finding)));
     $partial = in_array((string) $diagnostic['status'], REPORT_PARTIAL_STATUSES, true);
     $summary = decodeReportSummary($diagnostic['summary_json'] ?? null);
     $blocked = buildBlockedPageReasons($pages, $summary['blocked'] ?? null);
@@ -240,6 +267,7 @@ function buildReport(array $diagnostic, array $findings, array $stackItems, arra
         'databasesStale'    => in_array(true, array_column($databases, 'stale'), true),
         'databasesWarning'  => sprintf(REPORT_DATABASE_STALE_WARNING, REPORT_DATABASE_STALE_DAYS),
         'uncheckedSteps'    => buildReportUncheckedSteps($diagnostic['steps'] ?? [], $partial),
+        'aiProblem'         => buildReportAiProblem($diagnostic, $aiFindings, $findings, $stackItems, $aiResults),
     ];
 }
 
@@ -863,7 +891,7 @@ function buildReportFindingGroups(array $findings, array $pageUrls): array
  * @param array<int, string>   $pageUrls
  * @return array{title: string, severityLabel: string, badgeClass: string, categoryLabel: string,
  *               location: ?string, line: ?string, widths: ?string, pageUrl: ?string, pageUrls: list<string>,
- *               details: ?string, evidenceJson: ?string}
+ *               details: ?string, evidenceJson: ?string, anchorId: ?string}
  */
 function buildReportFinding(array $finding, array $pageUrls): array
 {
@@ -893,6 +921,7 @@ function buildReportFinding(array $finding, array $pageUrls): array
         'pageUrls'      => $manyPages ? $findingPages : [],
         'details'       => $details,
         'evidenceJson'  => $evidenceJson !== false ? $evidenceJson : null,
+        'anchorId'      => isset($finding['id']) ? sprintf(REPORT_FINDING_ANCHOR, (int) $finding['id']) : null,
     ];
 }
 
@@ -1099,7 +1128,8 @@ function buildReportStackGroups(array $stackItems, array $outdated = []): array
  * @param bool|null            $unsupported находка `outdated` по элементу: true — ветка без поддержки,
  *                                          false — устарела, null — находки нет
  * @return array{name: string, version: ?string, latestVersion: ?string, statusLabel: ?string, statusBadge: ?string,
- *               confidenceLabel: string, badgeClass: string, evidence: list<array{source: string, detail: string}>}
+ *               confidenceLabel: string, badgeClass: string, evidence: list<array{source: string, detail: string}>,
+ *               anchorId: ?string}
  */
 function buildReportStackItem(array $item, ?bool $unsupported = null): array
 {
@@ -1138,6 +1168,7 @@ function buildReportStackItem(array $item, ?bool $unsupported = null): array
         'confidenceLabel' => REPORT_CONFIDENCE_LABELS[$confidence] ?? $confidence,
         'badgeClass'      => REPORT_CONFIDENCE_BADGES[$confidence] ?? REPORT_BADGE_NEUTRAL,
         'evidence'        => $evidence,
+        'anchorId'        => isset($item['id']) ? sprintf(REPORT_STACK_ANCHOR, (int) $item['id']) : null,
     ];
 }
 
@@ -1220,4 +1251,177 @@ function buildReportUncheckedSteps(array $steps, bool $partial): array
     }
 
     return $result;
+}
+
+/**
+ * @param array<string, mixed> $finding
+ */
+function isReportAiFinding(array $finding): bool
+{
+    return ($finding['source'] ?? FINDING_SOURCE_CHECK) === FINDING_SOURCE_AI;
+}
+
+/**
+ * Блок «Разбор жалобы (ИИ)». Нет шага `ai_problem` (диагностика до фазы 4) → null, карточки нет.
+ * Шаг `done` — гипотезы последнего ответа со ссылками на факты; `failed` — ошибка; `skipped` / не выполнен —
+ * причина.
+ *
+ * @param array<string, mixed>       $diagnostic строка `diagnostics` + `steps`
+ * @param list<array<string, mixed>> $aiFindings находки `source = ai`
+ * @param list<array<string, mixed>> $findings   находки проверок (на них ведут ссылки)
+ * @param list<array<string, mixed>> $stackItems
+ * @param list<array<string, mixed>> $aiResults
+ * @return array{state: string, message: ?string, complaint: ?string, hypotheses: list<array>, rejected: int,
+ *               meta: ?array}|null
+ */
+function buildReportAiProblem(
+    array $diagnostic,
+    array $aiFindings,
+    array $findings,
+    array $stackItems,
+    array $aiResults
+): ?array {
+    $step = null;
+    foreach ($diagnostic['steps'] ?? [] as $candidate) {
+        if (($candidate['step_code'] ?? null) === REPORT_AI_PROBLEM_STEP_CODE) {
+            $step = $candidate;
+        }
+    }
+    if ($step === null) {
+        return null;
+    }
+
+    $aiResult = findLatestAiResult($aiResults, REPORT_AI_PROBLEM_TASK);
+    $state = match ((string) $step['status']) {
+        REPORT_AI_STATE_DONE   => REPORT_AI_STATE_DONE,
+        REPORT_AI_STATE_FAILED => REPORT_AI_STATE_FAILED,
+        default                => REPORT_AI_STATE_SKIPPED,
+    };
+    $message = isset($step['message']) && $step['message'] !== '' ? (string) $step['message'] : null;
+    if ($state === REPORT_AI_STATE_FAILED && ($aiResult['status'] ?? null) === REPORT_AI_RESULT_ERROR) {
+        $message = (string) ($aiResult['error_message'] ?? $message);
+    }
+
+    $hypotheses = [];
+    if ($state === REPORT_AI_STATE_DONE) {
+        $resultId = $aiResult !== null ? (int) $aiResult['id'] : null;
+        $targets = buildReportEvidenceTargets($findings, $stackItems);
+        foreach ($aiFindings as $finding) {
+            $fromResult = $resultId === null || (int) ($finding['ai_result_id'] ?? 0) === $resultId;
+            if (($finding['category'] ?? null) === REPORT_AI_HYPOTHESIS_CATEGORY && $fromResult) {
+                $hypotheses[] = buildReportHypothesis($finding, $targets);
+            }
+        }
+    }
+    $complaint = trim((string) ($diagnostic['problem_text'] ?? ''));
+    $parsed = is_array($aiResult['parsed_json'] ?? null) ? $aiResult['parsed_json'] : [];
+
+    return [
+        'state'      => $state,
+        'message'    => $state === REPORT_AI_STATE_DONE ? null : ($message ?? REPORT_AI_NOT_RUN_MESSAGE),
+        'complaint'  => $complaint !== '' ? $complaint : null,
+        'hypotheses' => $hypotheses,
+        'rejected'   => is_int($parsed['rejected'] ?? null) ? $parsed['rejected'] : 0,
+        'meta'       => $aiResult !== null ? buildReportAiMeta($aiResult) : null,
+    ];
+}
+
+/**
+ * Последний ответ ИИ по задаче (после перезапуска их несколько).
+ *
+ * @param list<array<string, mixed>> $aiResults по порядку записи
+ * @return array<string, mixed>|null
+ */
+function findLatestAiResult(array $aiResults, string $task): ?array
+{
+    $latest = null;
+    foreach ($aiResults as $aiResult) {
+        if (($aiResult['task'] ?? null) === $task) {
+            $latest = $aiResult;
+        }
+    }
+
+    return $latest;
+}
+
+/**
+ * Куда ведут ссылки: `finding_ids` → заголовок находки, `stack_ids` → название и версия.
+ *
+ * @param list<array<string, mixed>> $findings
+ * @param list<array<string, mixed>> $stackItems
+ * @return array{finding_ids: array<int, array{href: string, label: string}>,
+ *               stack_ids: array<int, array{href: string, label: string}>}
+ */
+function buildReportEvidenceTargets(array $findings, array $stackItems): array
+{
+    $targets = ['finding_ids' => [], 'stack_ids' => []];
+    foreach ($findings as $finding) {
+        if (isset($finding['id'])) {
+            $id = (int) $finding['id'];
+            $targets['finding_ids'][$id] = [
+                'href'  => '#' . sprintf(REPORT_FINDING_ANCHOR, $id),
+                'label' => (string) $finding['title'],
+            ];
+        }
+    }
+    foreach ($stackItems as $item) {
+        if (isset($item['id'])) {
+            $id = (int) $item['id'];
+            $version = isset($item['version']) && $item['version'] !== '' ? ' ' . $item['version'] : '';
+            $targets['stack_ids'][$id] = [
+                'href'  => '#' . sprintf(REPORT_STACK_ANCHOR, $id),
+                'label' => (string) $item['name'] . $version,
+            ];
+        }
+    }
+
+    return $targets;
+}
+
+/**
+ * @param array<string, mixed>                                          $finding находка `hypothesis`
+ * @param array<string, array<int, array{href: string, label: string}>> $targets
+ * @return array{title: string, severityLabel: string, badgeClass: string, details: ?string,
+ *               references: list<array{href: string, label: string}>}
+ */
+function buildReportHypothesis(array $finding, array $targets): array
+{
+    $severity = (string) $finding['severity'];
+    $evidence = is_array($finding['evidence'] ?? null) ? $finding['evidence'] : [];
+
+    $references = [];
+    foreach (REPORT_AI_EVIDENCE_KEYS as $key) {
+        foreach (is_array($evidence[$key] ?? null) ? $evidence[$key] : [] as $id) {
+            // Находку или элемент стека могли удалить: ссылки в никуда не выводятся
+            if (is_int($id) && isset($targets[$key][$id])) {
+                $references[] = $targets[$key][$id];
+            }
+        }
+    }
+
+    return [
+        'title'         => (string) $finding['title'],
+        'severityLabel' => REPORT_SEVERITY_LABELS[$severity] ?? $severity,
+        'badgeClass'    => REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL,
+        'details'       => isset($finding['details']) && $finding['details'] !== '' ? (string) $finding['details'] : null,
+        'references'    => $references,
+    ];
+}
+
+/**
+ * Подпись под ИИ-блоком: модель, дата, токены.
+ *
+ * @param array<string, mixed> $aiResult строка `ai_results`
+ * @return array{model: string, date: ?string, tokensIn: string, tokensOut: string}
+ */
+function buildReportAiMeta(array $aiResult): array
+{
+    $created = is_string($aiResult['created_at'] ?? null) ? strtotime($aiResult['created_at']) : false;
+
+    return [
+        'model'     => (string) $aiResult['model'],
+        'date'      => $created !== false ? date(REPORT_AI_DATE_FORMAT, $created) : null,
+        'tokensIn'  => isset($aiResult['tokens_in']) ? (string) $aiResult['tokens_in'] : REPORT_AI_NO_TOKENS,
+        'tokensOut' => isset($aiResult['tokens_out']) ? (string) $aiResult['tokens_out'] : REPORT_AI_NO_TOKENS,
+    ];
 }

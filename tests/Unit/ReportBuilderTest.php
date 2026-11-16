@@ -62,6 +62,107 @@ final class ReportBuilderTest extends TestCase
         $this->assertNull($item['evidenceJson']);
     }
 
+    public function testAiFindingsAreNotInFindingsListAndAnchorsAreSet(): void
+    {
+        $report = buildReport($this->diagnostic(), [
+            $this->finding('high', 'Факт', ['id' => 11, 'source' => 'check']),
+            $this->finding('critical', 'Гипотеза', ['id' => 12, 'source' => 'ai', 'category' => 'hypothesis']),
+        ], [$this->stackItem(5)], []);
+
+        $this->assertSame(1, $report['findingCount']);
+        $this->assertSame(['Факт'], array_column($report['findingGroups'][0]['items'], 'title'));
+        $this->assertSame('finding-11', $report['findingGroups'][0]['items'][0]['anchorId']);
+        $this->assertSame('stack-5', $report['stackGroups'][0]['items'][0]['anchorId']);
+        $this->assertNull($report['aiProblem'], 'Нет шага ai_problem (старая диагностика) — нет карточки');
+    }
+
+    public function testAiProblemShowsHypothesesOfLatestResultWithReferences(): void
+    {
+        $diagnostic = $this->diagnostic('done', [$this->step('ai_problem', 'done', 'Гипотез: 1.')])
+            + ['problem_text' => 'Не работает корзина'];
+        $findings = [
+            $this->finding('high', 'Fatal error в cart.php', ['id' => 11, 'source' => 'check']),
+            $this->finding('critical', 'Корзина падает', ['id' => 20, 'source' => 'ai', 'category' => 'hypothesis',
+                'ai_result_id' => 3, 'details' => 'Объяснение',
+                'evidence' => ['finding_ids' => [11, 404], 'stack_ids' => [5]]]),
+            $this->finding('low', 'Старая гипотеза', ['id' => 21, 'source' => 'ai', 'category' => 'hypothesis',
+                'ai_result_id' => 2, 'evidence' => ['finding_ids' => [11], 'stack_ids' => []]]),
+        ];
+        $aiResults = [
+            $this->aiResult(2, 'ok', ['rejected' => 0]),
+            $this->aiResult(3, 'ok', ['rejected' => 2]),
+        ];
+
+        $block = buildReport($diagnostic, $findings, [$this->stackItem(5)], [], [], $aiResults)['aiProblem'];
+
+        $this->assertSame('done', $block['state']);
+        $this->assertNull($block['message']);
+        $this->assertSame('Не работает корзина', $block['complaint']);
+        $this->assertSame(2, $block['rejected']);
+        $this->assertSame(['Корзина падает'], array_column($block['hypotheses'], 'title'));
+        $this->assertSame(
+            [
+                ['href' => '#finding-11', 'label' => 'Fatal error в cart.php'],
+                ['href' => '#stack-5', 'label' => 'OpenCart 3.0.2.0'],
+            ],
+            $block['hypotheses'][0]['references']
+        );
+        $this->assertSame(
+            ['model' => 'qwen/qwen4-max', 'date' => '16.11.2026 12:30', 'tokensIn' => '1200', 'tokensOut' => '300'],
+            $block['meta']
+        );
+    }
+
+    public function testAiProblemSkippedAndFailedStates(): void
+    {
+        $skipped = buildReport(
+            $this->diagnostic('done', [$this->step('ai_problem', 'skipped', 'Ключ ROUTERAI_API_KEY не задан в .env.')]),
+            [],
+            [],
+            []
+        )['aiProblem'];
+        $this->assertSame('skipped', $skipped['state']);
+        $this->assertSame('Ключ ROUTERAI_API_KEY не задан в .env.', $skipped['message']);
+        $this->assertNull($skipped['meta']);
+        $this->assertNull($skipped['complaint']);
+
+        $failed = buildReport(
+            $this->diagnostic('done', [$this->step('ai_problem', 'failed', 'коротко')]),
+            [],
+            [],
+            [],
+            [],
+            [array_replace($this->aiResult(4, 'error', null), ['error_message' => 'RouterAI отклонил ключ API (401).'])]
+        )['aiProblem'];
+        $this->assertSame('failed', $failed['state']);
+        $this->assertSame('RouterAI отклонил ключ API (401).', $failed['message']);
+        $this->assertSame([], $failed['hypotheses']);
+
+        $unfinished = buildReport($this->diagnostic('failed', [$this->step('ai_problem', 'pending')]), [], [], [])['aiProblem'];
+        $this->assertSame('skipped', $unfinished['state']);
+        $this->assertSame(REPORT_AI_NOT_RUN_MESSAGE, $unfinished['message']);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function stackItem(int $id): array
+    {
+        return ['id' => $id, 'category' => 'cms', 'name' => 'OpenCart', 'version' => '3.0.2.0', 'confidence' => 'high',
+            'evidence' => []];
+    }
+
+    /**
+     * @param array<string, mixed>|null $parsed
+     * @return array<string, mixed>
+     */
+    private function aiResult(int $id, string $status, ?array $parsed): array
+    {
+        return ['id' => $id, 'task' => 'problem', 'model' => 'qwen/qwen4-max', 'status' => $status,
+            'parsed_json' => $parsed, 'error_message' => null, 'tokens_in' => 1200, 'tokens_out' => 300,
+            'created_at' => '2026-11-16 12:30:00'];
+    }
+
     public function testEmptyReportHasNoGroups(): void
     {
         $report = buildReport($this->diagnostic(), [], [], []);

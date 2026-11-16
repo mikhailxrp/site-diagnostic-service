@@ -10,17 +10,19 @@ require_once ROOT_PATH . '/src/Core/Database.php';
 
 /**
  * @param array{page_id: ?int, source: string, category: string, severity: string, title: string,
- *              details: ?string, location: ?string, evidence: ?array, fingerprint: string} $finding
- *        строка из `makeFinding()`
+ *              details: ?string, location: ?string, evidence: ?array, fingerprint: string, ai_result_id?: ?int} $finding
+ *        строка из `makeFinding()` или `makeAiFinding()` (у неё есть `ai_result_id`)
  */
 function insertFinding(int $diagnosticId, array $finding): int
 {
     $pdo = getPdo();
     $statement = $pdo->prepare(
         'INSERT INTO findings
-            (diagnostic_id, page_id, source, category, severity, title, details, location, evidence, fingerprint)
+            (diagnostic_id, page_id, source, category, severity, title, details, location, evidence, fingerprint,
+             ai_result_id)
          VALUES
-            (:diagnostic_id, :page_id, :source, :category, :severity, :title, :details, :location, :evidence, :fingerprint)'
+            (:diagnostic_id, :page_id, :source, :category, :severity, :title, :details, :location, :evidence, :fingerprint,
+             :ai_result_id)'
     );
     $statement->execute([
         'diagnostic_id' => $diagnosticId,
@@ -35,6 +37,7 @@ function insertFinding(int $diagnosticId, array $finding): int
             ? json_encode($finding['evidence'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
             : null,
         'fingerprint'   => $finding['fingerprint'],
+        'ai_result_id'  => $finding['ai_result_id'] ?? null,
     ]);
 
     return (int) $pdo->lastInsertId();
@@ -48,7 +51,7 @@ function insertFinding(int $diagnosticId, array $finding): int
 function getFindingsByDiagnostic(int $diagnosticId): array
 {
     $statement = getPdo()->prepare(
-        "SELECT id, page_id, source, category, severity, title, details, location, evidence, fingerprint
+        "SELECT id, page_id, source, category, severity, title, details, location, evidence, fingerprint, ai_result_id
          FROM findings
          WHERE diagnostic_id = :diagnostic_id
          ORDER BY FIELD(severity, 'critical', 'high', 'medium', 'low', 'info'), id"

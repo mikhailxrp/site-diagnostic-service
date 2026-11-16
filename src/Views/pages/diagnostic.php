@@ -200,6 +200,61 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                     <?php endif; ?>
                                 </section>
                             </div>
+                            <?php if ($report['aiProblem'] !== null) : ?>
+                                <div class="col-12">
+                                    <section class="card" aria-labelledby="report-ai-problem-title">
+                                        <div class="card-header">
+                                            <h2 class="card-title" id="report-ai-problem-title">Разбор жалобы (ИИ)</h2>
+                                            <div class="card-actions">
+                                                <span class="badge bg-purple-lt">ИИ</span>
+                                            </div>
+                                        </div>
+                                        <div class="card-body border-bottom">
+                                            <?php if ($report['aiProblem']['complaint'] !== null) : ?>
+                                                <div class="datagrid-title">Жалоба клиента</div>
+                                                <p class="text-secondary text-break mb-0"><?= nl2br(e($report['aiProblem']['complaint']), false) ?></p>
+                                            <?php else : ?>
+                                                <p class="text-secondary mb-0">Описание проблемы не указано — гипотезы построены только по фактам.</p>
+                                            <?php endif; ?>
+                                        </div>
+                                        <?php if ($report['aiProblem']['state'] === 'done') : ?>
+                                            <?php if ($report['aiProblem']['hypotheses'] === []) : ?>
+                                                <div class="card-body">
+                                                    <p class="text-secondary mb-0">ИИ не предложил гипотез, опирающихся на факты.</p>
+                                                </div>
+                                            <?php else : ?>
+                                                <ul class="list-group list-group-flush">
+                                                    <?php foreach ($report['aiProblem']['hypotheses'] as $hypothesis) : ?>
+                                                        <li class="list-group-item">
+                                                            <div class="mb-1">
+                                                                <span class="badge <?= e($hypothesis['badgeClass']) ?>"><?= e($hypothesis['severityLabel']) ?></span>
+                                                            </div>
+                                                            <h3 class="h4 mb-1 text-break"><?= e($hypothesis['title']) ?></h3>
+                                                            <?php if ($hypothesis['details'] !== null) : ?>
+                                                                <p class="text-secondary mb-2 text-break"><?= nl2br(e($hypothesis['details']), false) ?></p>
+                                                            <?php endif; ?>
+                                                            <?php if ($hypothesis['references'] !== []) : ?>
+                                                                <div class="small text-secondary">Опирается на:</div>
+                                                                <ul class="list-unstyled small mb-0">
+                                                                    <?php foreach ($hypothesis['references'] as $reference) : ?>
+                                                                        <li class="text-break"><a href="<?= e($reference['href']) ?>" class="d-block py-3" data-evidence-link><?= e($reference['label']) ?></a></li>
+                                                                    <?php endforeach; ?>
+                                                                </ul>
+                                                            <?php endif; ?>
+                                                        </li>
+                                                    <?php endforeach; ?>
+                                                </ul>
+                                            <?php endif; ?>
+                                            <?php if ($report['aiProblem']['rejected'] > 0) : ?>
+                                                <div class="card-body border-top">
+                                                    <p class="small text-secondary mb-0">Отброшено без ссылок на факты: <?= e($report['aiProblem']['rejected']) ?></p>
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                        <?php render('components/ai-block', ['aiBlock' => $report['aiProblem']]); ?>
+                                    </section>
+                                </div>
+                            <?php endif; ?>
                             <?php if ($report['pagespeed'] !== null) : ?>
                                 <div class="col-12">
                                     <section class="card" aria-labelledby="report-speed-title">
@@ -366,7 +421,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                                             <span class="badge <?= e($findingGroup['badgeClass']) ?>"><?= e($findingGroup['count']) ?></span>
                                                         </li>
                                                         <?php foreach ($findingGroup['items'] as $finding) : ?>
-                                                            <?php render('components/finding', ['finding' => $finding]); ?>
+                                                            <?php render('components/finding', ['finding' => $finding, 'withAnchor' => true]); ?>
                                                         <?php endforeach; ?>
                                                     </ul>
                                                 <?php endforeach; ?>

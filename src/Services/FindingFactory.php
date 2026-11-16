@@ -3,11 +3,12 @@
 declare(strict_types=1);
 
 /**
- * Сборка находки от проверок кода (`source = check`) в виде строки для `findings`, без БД:
+ * Сборка находки от проверок кода (`source = check`) и от ИИ (`source = ai`) в виде строки для `findings`, без БД:
  * серьёзность по категории, `fingerprint` для сравнения диагностик между собой.
  */
 
 const FINDING_SOURCE_CHECK = 'check';
+const FINDING_SOURCE_AI    = 'ai';
 
 const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
 
@@ -73,6 +74,29 @@ function makeFinding(
         'evidence'    => $evidence,
         'fingerprint' => buildFingerprint($category, $location, $key),
     ];
+}
+
+/**
+ * Находка от ИИ: `source = ai`, ссылки на факты в `evidence` (`{"finding_ids": [..], "stack_ids": [..]}`),
+ * `ai_result_id` — ответ ИИ, который её дал. Fingerprint — по заголовку без регистра и лишних пробелов.
+ *
+ * @param array<string, list<int>> $evidence ссылки на факты (уже проверенные `validateAiEvidence()`)
+ * @return array{page_id: ?int, source: string, category: string, severity: string, title: string,
+ *               details: ?string, location: ?string, evidence: array, fingerprint: string, ai_result_id: int}
+ * @throws InvalidArgumentException неизвестная категория или серьёзность
+ */
+function makeAiFinding(
+    string $category,
+    string $title,
+    ?string $details,
+    string $severity,
+    array $evidence,
+    int $aiResultId
+): array {
+    $key = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', $title)));
+    $finding = makeFinding($category, $title, null, $key, $details, $evidence, null, $severity);
+
+    return ['source' => FINDING_SOURCE_AI, 'ai_result_id' => $aiResultId] + $finding;
 }
 
 /**

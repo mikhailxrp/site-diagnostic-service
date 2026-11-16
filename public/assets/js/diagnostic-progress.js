@@ -84,6 +84,32 @@ const startPolling = (root, statusBadge) => {
   setTimeout(poll, POLL_INTERVAL_MS);
 };
 
+/**
+ * Ссылка «Опирается на» ведёт к находке на вкладке «По серьёзности»: если открыта другая вкладка,
+ * сначала переключаем её (через ссылку вкладки — переключает Tabler), потом прокручиваем к цели.
+ */
+const showEvidenceTarget = (event) => {
+  const link = event.target.closest('[data-evidence-link]');
+  if (link === null) {
+    return;
+  }
+  const target = document.getElementById(decodeURIComponent(link.hash.slice(1)));
+  if (target === null) {
+    return;
+  }
+  event.preventDefault();
+
+  const pane = target.closest('.tab-pane');
+  if (pane !== null && !pane.classList.contains('active')) {
+    document.querySelector(`[data-bs-toggle="tab"][href="#${CSS.escape(pane.id)}"]`)?.click();
+  }
+  history.replaceState(null, '', link.hash);
+  // Переключая вкладку, Bootstrap ставит фокус на её ссылку и прокручивает к ней — прокрутка к цели после этого
+  requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
+};
+
+document.addEventListener('click', showEvidenceTarget);
+
 const root = document.querySelector('[data-diagnostic]');
 const statusBadge = document.querySelector('[data-diagnostic-status]');
 
