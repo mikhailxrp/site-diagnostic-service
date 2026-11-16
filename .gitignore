@@ -16,3 +16,6 @@ storage/pdf/*
 !storage/pdf/.gitkeep
 storage/databases/*
 !storage/databases/.gitkeep
+
+# Скриншоты и снимки страниц Playwright MCP (ручные проверки)
+.playwright-mcp/
