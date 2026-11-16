@@ -11,6 +11,7 @@ declare(strict_types=1);
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
 require_once ROOT_PATH . '/src/Services/FindingFactory.php';
 require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
+require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
 
 /** Статусы диагностики, для которых строится отчёт; при `failed` — частичный (то, что успело собраться) */
 const REPORT_STATUSES         = ['done', 'failed'];
@@ -214,6 +215,15 @@ const REPORT_AI_DATE_FORMAT        = 'd.m.Y H:i';
 const REPORT_AI_NO_TOKENS          = '—';
 const REPORT_AI_EVIDENCE_KEYS      = ['finding_ids', 'stack_ids'];
 
+/** Блок «Вёрстка (ИИ)»: шаг `ai_visual`, ответы ИИ `visual` (по одному на страницу), находки `layout` */
+const REPORT_AI_VISUAL_STEP_CODE    = 'ai_visual';
+const REPORT_AI_VISUAL_TASK         = 'visual';
+const REPORT_AI_LAYOUT_CATEGORY     = 'layout';
+const REPORT_AI_RESULT_OK           = 'ok';
+const REPORT_AI_VISUAL_CROP_NOTE    = 'ИИ смотрел только верх страницы: %d px на каждой ширине, ниже не проверялось.';
+const REPORT_AI_VISUAL_GALLERY_TYPE = 'layout-%d'; // id модального окна не совпадёт с галереей «По страницам»
+const REPORT_AI_VISUAL_PAGE_LABEL   = '%s: %s';
+
 /**
  * @param array<string, mixed>       $diagnostic строка `diagnostics` + `steps` (как из getDiagnosticWithSteps())
  * @param list<array<string, mixed>> $findings   из getFindingsByDiagnostic()
@@ -225,7 +235,7 @@ const REPORT_AI_EVIDENCE_KEYS      = ['finding_ids', 'stack_ids'];
  *               findingCount: int,
  *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
  *               stackGroups: list<array>, databases: list<array>, databasesStale: bool, databasesWarning: string,
- *               uncheckedSteps: list<array>, aiProblem: ?array}
+ *               uncheckedSteps: list<array>, aiProblem: ?array, aiVisual: ?array}
  */
 function buildReport(
     array $diagnostic,
@@ -268,6 +278,7 @@ function buildReport(
         'databasesWarning'  => sprintf(REPORT_DATABASE_STALE_WARNING, REPORT_DATABASE_STALE_DAYS),
         'uncheckedSteps'    => buildReportUncheckedSteps($diagnostic['steps'] ?? [], $partial),
         'aiProblem'         => buildReportAiProblem($diagnostic, $aiFindings, $findings, $stackItems, $aiResults),
+        'aiVisual'          => buildReportAiVisual($diagnostic, $aiFindings, $pages, $screenshots, $aiResults),
     ];
 }
 
@@ -1423,5 +1434,197 @@ function buildReportAiMeta(array $aiResult): array
         'date'      => $created !== false ? date(REPORT_AI_DATE_FORMAT, $created) : null,
         'tokensIn'  => isset($aiResult['tokens_in']) ? (string) $aiResult['tokens_in'] : REPORT_AI_NO_TOKENS,
         'tokensOut' => isset($aiResult['tokens_out']) ? (string) $aiResult['tokens_out'] : REPORT_AI_NO_TOKENS,
+    ];
+}
+
+/**
+ * Блок «Вёрстка (ИИ)». Нет шага `ai_visual` (диагностика до таска 3 фазы 4) → null, карточки нет.
+ * Шаг `done` — поломки ответов текущего запуска шага с миниатюрами скриншотов; часть страниц не проверена —
+ * предупреждение с сообщением шага; `failed` / `skipped` — причина из сообщения шага.
+ *
+ * @param array<string, mixed>       $diagnostic  строка `diagnostics` + `steps`
+ * @param list<array<string, mixed>> $aiFindings  находки `source = ai`
+ * @param list<array<string, mixed>> $pages       из getCheckedPagesByDiagnostic()
+ * @param list<array<string, mixed>> $screenshots из getScreenshotsByDiagnostic()
+ * @param list<array<string, mixed>> $aiResults
+ * @return array{state: string, message: ?string, warning: ?string, cropNote: string, issues: list<array>,
+ *               rejected: int, meta: ?array}|null
+ */
+function buildReportAiVisual(
+    array $diagnostic,
+    array $aiFindings,
+    array $pages,
+    array $screenshots,
+    array $aiResults
+): ?array {
+    $step = findReportStep($diagnostic['steps'] ?? [], REPORT_AI_VISUAL_STEP_CODE);
+    if ($step === null) {
+        return null;
+    }
+
+    $state = match ((string) $step['status']) {
+        REPORT_AI_STATE_DONE   => REPORT_AI_STATE_DONE,
+        REPORT_AI_STATE_FAILED => REPORT_AI_STATE_FAILED,
+        default                => REPORT_AI_STATE_SKIPPED,
+    };
+    $message = isset($step['message']) && $step['message'] !== '' ? (string) $step['message'] : null;
+
+    $runResults = filterReportRunAiResults($aiResults, REPORT_AI_VISUAL_TASK, $step['started_at'] ?? null);
+    $okIds = [];
+    $rejected = 0;
+    foreach ($runResults as $aiResult) {
+        if (($aiResult['status'] ?? null) === REPORT_AI_RESULT_OK) {
+            $okIds[(int) $aiResult['id']] = true;
+            $parsed = is_array($aiResult['parsed_json'] ?? null) ? $aiResult['parsed_json'] : [];
+            $rejected += is_int($parsed['rejected'] ?? null) ? $parsed['rejected'] : 0;
+        }
+    }
+
+    $issues = [];
+    if ($state === REPORT_AI_STATE_DONE) {
+        $layout = array_values(array_filter(
+            $aiFindings,
+            static fn (array $finding): bool => ($finding['category'] ?? null) === REPORT_AI_LAYOUT_CATEGORY
+                && isset($okIds[(int) ($finding['ai_result_id'] ?? 0)])
+        ));
+        usort($layout, static fn (array $a, array $b): int => reportSeverityRank($a) <=> reportSeverityRank($b));
+        $pageMap = array_column($pages, null, 'id');
+        $screenshotMap = array_column($screenshots, null, 'id');
+        foreach ($layout as $finding) {
+            $issues[] = buildReportLayoutIssue($finding, $pageMap, $screenshotMap);
+        }
+    }
+
+    $hasUnchecked = $message !== null && str_contains($message, AI_VISUAL_UNCHECKED_LABEL);
+
+    return [
+        'state'    => $state,
+        'message'  => $state === REPORT_AI_STATE_DONE ? null : ($message ?? REPORT_AI_NOT_RUN_MESSAGE),
+        'warning'  => $state === REPORT_AI_STATE_DONE && $hasUnchecked ? $message : null,
+        'cropNote' => sprintf(REPORT_AI_VISUAL_CROP_NOTE, AI_VISUAL_CROP_HEIGHT_PX),
+        'issues'   => $issues,
+        'rejected' => $rejected,
+        'meta'     => buildReportAiRunMeta($runResults),
+    ];
+}
+
+/**
+ * Последняя строка шага с этим кодом.
+ *
+ * @param list<array<string, mixed>> $steps строки `diagnostic_steps`
+ * @return array<string, mixed>|null
+ */
+function findReportStep(array $steps, string $code): ?array
+{
+    $found = null;
+    foreach ($steps as $step) {
+        if (($step['step_code'] ?? null) === $code) {
+            $found = $step;
+        }
+    }
+
+    return $found;
+}
+
+/**
+ * Ответы ИИ по задаче из текущего запуска шага: записаны не раньше его начала (после перезапуска ИИ-анализа
+ * старые ответы остаются в `ai_results`). Шаг не начинался → пусто.
+ *
+ * @param list<array<string, mixed>> $aiResults
+ * @return list<array<string, mixed>>
+ */
+function filterReportRunAiResults(array $aiResults, string $task, mixed $stepStartedAt): array
+{
+    $startedAt = is_string($stepStartedAt) ? strtotime($stepStartedAt) : false;
+    if ($startedAt === false) {
+        return [];
+    }
+
+    return array_values(array_filter($aiResults, static function (array $aiResult) use ($task, $startedAt): bool {
+        $created = is_string($aiResult['created_at'] ?? null) ? strtotime($aiResult['created_at']) : false;
+
+        return ($aiResult['task'] ?? null) === $task && $created !== false && $created >= $startedAt;
+    }));
+}
+
+/**
+ * Подпись под ИИ-блоком из нескольких ответов: модель и дата последнего, токены — сумма. Ответов нет → null.
+ *
+ * @param list<array<string, mixed>> $aiResults
+ * @return array{model: string, date: ?string, tokensIn: string, tokensOut: string}|null
+ */
+function buildReportAiRunMeta(array $aiResults): ?array
+{
+    if ($aiResults === []) {
+        return null;
+    }
+
+    $meta = buildReportAiMeta($aiResults[array_key_last($aiResults)]);
+    foreach (['tokens_in' => 'tokensIn', 'tokens_out' => 'tokensOut'] as $column => $key) {
+        $values = array_filter(array_column($aiResults, $column), static fn (mixed $value): bool => $value !== null);
+        $meta[$key] = $values !== [] ? (string) array_sum(array_map('intval', $values)) : REPORT_AI_NO_TOKENS;
+    }
+
+    return $meta;
+}
+
+/**
+ * Место серьёзности в FINDING_SEVERITIES: меньше — серьёзнее.
+ *
+ * @param array<string, mixed> $finding
+ */
+function reportSeverityRank(array $finding): int
+{
+    $rank = array_search($finding['severity'] ?? null, FINDING_SEVERITIES, true);
+
+    return $rank === false ? count(FINDING_SEVERITIES) : $rank;
+}
+
+/**
+ * Поломка вёрстки для View: страница и миниатюры скриншотов, на которые она ссылается (удалённые не выводятся).
+ *
+ * @param array<string, mixed>             $finding       находка `layout`
+ * @param array<int, array<string, mixed>> $pageMap       id → строка `checked_pages`
+ * @param array<int, array<string, mixed>> $screenshotMap id → строка `screenshots`
+ * @return array{title: string, severityLabel: string, badgeClass: string, details: ?string, page: ?string,
+ *               gallery: array{screenshots: list<array>, screenshotsEmpty: string, screenshotsNote: ?string}}
+ */
+function buildReportLayoutIssue(array $finding, array $pageMap, array $screenshotMap): array
+{
+    $severity = (string) $finding['severity'];
+    $page = isset($finding['page_id']) ? ($pageMap[(int) $finding['page_id']] ?? null) : null;
+    $url = $page !== null ? (string) $page['url'] : (string) ($finding['location'] ?? '');
+    $typeLabel = $page !== null
+        ? (REPORT_PAGE_TYPE_LABELS[(string) $page['page_type']] ?? (string) $page['page_type'])
+        : null;
+    $pageLabel = match (true) {
+        $url === ''        => null,
+        $typeLabel === null => $url,
+        default            => sprintf(REPORT_AI_VISUAL_PAGE_LABEL, $typeLabel, $url),
+    };
+
+    $evidence = is_array($finding['evidence'] ?? null) ? $finding['evidence'] : [];
+    $shots = [];
+    foreach (is_array($evidence[AI_VISUAL_EVIDENCE_KEY] ?? null) ? $evidence[AI_VISUAL_EVIDENCE_KEY] : [] as $id) {
+        if (is_int($id) && isset($screenshotMap[$id])) {
+            $shots[] = ['id' => $id, 'width' => (int) $screenshotMap[$id]['viewport_width']];
+        }
+    }
+
+    return [
+        'title'         => (string) $finding['title'],
+        'severityLabel' => REPORT_SEVERITY_LABELS[$severity] ?? $severity,
+        'badgeClass'    => REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL,
+        'details'       => isset($finding['details']) && $finding['details'] !== '' ? (string) $finding['details'] : null,
+        'page'          => $pageLabel,
+        'gallery'       => [
+            'screenshots'      => buildReportScreenshots(
+                $shots,
+                sprintf(REPORT_AI_VISUAL_GALLERY_TYPE, (int) ($finding['id'] ?? 0)),
+                $typeLabel ?? $url
+            ),
+            'screenshotsEmpty' => REPORT_SCREENSHOTS_EMPTY,
+            'screenshotsNote'  => null,
+        ],
     ];
 }

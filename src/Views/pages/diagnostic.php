@@ -255,6 +255,57 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                     </section>
                                 </div>
                             <?php endif; ?>
+                            <?php if ($report['aiVisual'] !== null) : ?>
+                                <div class="col-12">
+                                    <section class="card" aria-labelledby="report-ai-visual-title">
+                                        <div class="card-header">
+                                            <h2 class="card-title" id="report-ai-visual-title">Вёрстка (ИИ)</h2>
+                                            <div class="card-actions">
+                                                <span class="badge bg-purple-lt">ИИ</span>
+                                            </div>
+                                        </div>
+                                        <?php if ($report['aiVisual']['state'] === 'done') : ?>
+                                            <div class="card-body border-bottom">
+                                                <p class="text-secondary mb-0"><?= e($report['aiVisual']['cropNote']) ?></p>
+                                                <?php if ($report['aiVisual']['warning'] !== null) : ?>
+                                                    <div class="alert alert-warning mt-3 mb-0" role="status">
+                                                        <div class="alert-description text-break"><?= e($report['aiVisual']['warning']) ?></div>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php if ($report['aiVisual']['issues'] === []) : ?>
+                                                <div class="card-body">
+                                                    <p class="text-secondary mb-0">ИИ не нашёл поломок вёрстки в верхней части страниц.</p>
+                                                </div>
+                                            <?php else : ?>
+                                                <ul class="list-group list-group-flush">
+                                                    <?php foreach ($report['aiVisual']['issues'] as $issue) : ?>
+                                                        <li class="list-group-item">
+                                                            <div class="mb-1">
+                                                                <span class="badge <?= e($issue['badgeClass']) ?>"><?= e($issue['severityLabel']) ?></span>
+                                                            </div>
+                                                            <h3 class="h4 mb-1 text-break"><?= e($issue['title']) ?></h3>
+                                                            <?php if ($issue['page'] !== null) : ?>
+                                                                <div class="small text-secondary text-break mb-1"><?= e($issue['page']) ?></div>
+                                                            <?php endif; ?>
+                                                            <?php if ($issue['details'] !== null) : ?>
+                                                                <p class="text-secondary mb-0 text-break"><?= nl2br(e($issue['details']), false) ?></p>
+                                                            <?php endif; ?>
+                                                            <?php render('components/screenshot-gallery', ['gallery' => $issue['gallery']]); ?>
+                                                        </li>
+                                                    <?php endforeach; ?>
+                                                </ul>
+                                            <?php endif; ?>
+                                            <?php if ($report['aiVisual']['rejected'] > 0) : ?>
+                                                <div class="card-body border-top">
+                                                    <p class="small text-secondary mb-0">Отброшено без ссылок на скриншоты: <?= e($report['aiVisual']['rejected']) ?></p>
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                        <?php render('components/ai-block', ['aiBlock' => $report['aiVisual']]); ?>
+                                    </section>
+                                </div>
+                            <?php endif; ?>
                             <?php if ($report['pagespeed'] !== null) : ?>
                                 <div class="col-12">
                                     <section class="card" aria-labelledby="report-speed-title">

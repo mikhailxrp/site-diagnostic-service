@@ -49,4 +49,16 @@ final class EvidenceValidatorTest extends TestCase
         $this->assertSame([10, 11], filterAiEvidenceIds([10, '10', '11', 'x', 1.5, -10, null], [10, 11]));
         $this->assertSame([], filterAiEvidenceIds('10', [10]));
     }
+
+    public function testScreenshotReferencesOfOtherRequestAreRejected(): void
+    {
+        // 31, 32 — скриншоты этой страницы; 41 — скриншот другой страницы той же диагностики
+        $result = validateAiEvidence([
+            ['title' => 'Своя и чужая', 'screenshot_ids' => [41, 32]],
+            ['title' => 'Только чужая', 'screenshot_ids' => [41]],
+        ], ['screenshot_ids' => [31, 32]]);
+
+        $this->assertSame(1, $result['rejected']);
+        $this->assertSame([32], $result['items'][0]['screenshot_ids']);
+    }
 }

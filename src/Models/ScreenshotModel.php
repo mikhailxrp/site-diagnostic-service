@@ -45,7 +45,7 @@ function getScreenshot(int $id): ?array
 function getScreenshotsByDiagnostic(int $diagnosticId): array
 {
     $statement = getPdo()->prepare(
-        'SELECT id, page_id, viewport_width
+        'SELECT id, page_id, viewport_width, file_path
          FROM screenshots
          WHERE diagnostic_id = :diagnostic_id
          ORDER BY page_id, viewport_width'

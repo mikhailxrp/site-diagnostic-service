@@ -32,6 +32,8 @@ require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 require_once ROOT_PATH . '/src/Services/AiClient.php';
 require_once ROOT_PATH . '/src/Services/Ai/ProblemAnalysis.php';
+require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
+require_once ROOT_PATH . '/src/Services/AiModels.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
 const STEP_MESSAGE_MAX_LENGTH = 1000; // как diagnostic_steps.message VARCHAR(1000)
@@ -64,6 +66,7 @@ function getDiagnosticSteps(): array
         ['code' => 'browser',      'title' => 'Проверка в браузере',     'handler' => 'runBrowserStep'],
         ['code' => 'pagespeed',    'title' => 'Скорость (PageSpeed)',    'handler' => 'runPageSpeedStep'],
         ['code' => 'ai_problem',   'title' => 'Разбор проблемы (ИИ)',    'handler' => 'runAiProblemStep'],
+        ['code' => 'ai_visual',    'title' => 'Проверка вёрстки (ИИ)',   'handler' => 'runAiVisualStep'],
     ];
 }
 
@@ -426,6 +429,54 @@ function runAiProblemStep(array $context): array
         'status'   => STEP_STATUS_DONE,
         'message'  => $analysis['message'],
         'facts'    => ['ai_result_id' => $analysis['ai_result_id']],
+        'findings' => $analysis['findings'],
+    ];
+}
+
+/**
+ * Шаг `ai_visual` с настоящей сетью и БД: скриншоты и страницы **из БД** → по запросу на страницу в RouterAI →
+ * `ai_results` → поломки вёрстки с `ai_result_id` (сохраняет `runDiagnostic()`). Нет ключа или скриншотов →
+ * `skipped`; модель без картинок или не проверена ни одна страница → исключение (`failed`).
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runAiVisualStep(array $context): array
+{
+    $key = env('ROUTERAI_API_KEY', '');
+    $keyError = validateAiKey($key);
+    if ($keyError !== null) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => $keyError];
+    }
+
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $selection = selectVisualPages(getCheckedPagesByDiagnostic($diagnosticId), getScreenshotsByDiagnostic($diagnosticId));
+    if ($selection['pages'] === []) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => AI_VISUAL_NO_SCREENSHOTS];
+    }
+
+    $model = resolveModelSetting(getSetting(AI_VISUAL_MODEL_SETTING));
+    $modelError = findVisualModelError($model, loadRouterAiModels()['models']);
+    if ($modelError !== null) {
+        throw new RuntimeException($modelError);
+    }
+
+    $analysis = runVisualAnalysis(
+        $context['diagnostic'],
+        $selection,
+        $model,
+        $key,
+        loadVisualPrompt(),
+        makeAiSender($key),
+        static fn (array $record): int => insertAiResult($diagnosticId, $record),
+        'loadVisualImage',
+        static fn () => touchDiagnosticHeartbeat($diagnosticId)
+    );
+
+    return [
+        'status'   => STEP_STATUS_DONE,
+        'message'  => $analysis['message'],
+        'facts'    => ['ai_result_ids' => $analysis['ai_result_ids']],
         'findings' => $analysis['findings'],
     ];
 }

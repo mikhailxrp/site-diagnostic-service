@@ -143,6 +143,99 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame(REPORT_AI_NOT_RUN_MESSAGE, $unfinished['message']);
     }
 
+    public function testAiVisualShowsIssuesOfCurrentRunWithScreenshotThumbnails(): void
+    {
+        $diagnostic = $this->diagnostic('done', [
+            $this->step('ai_visual', 'done', 'Поломок вёрстки: 2; проверено страниц: 1 из 1.')
+                + ['started_at' => '2026-11-16 12:00:00'],
+        ]);
+        $pages = [['id' => 1, 'url' => 'https://shop.ru/', 'page_type' => 'home', 'found_by' => 'start',
+            'http_code' => 200, 'response_ms' => 300, 'blocked' => 0]];
+        $screenshots = [
+            ['id' => 31, 'page_id' => 1, 'viewport_width' => 360],
+            ['id' => 32, 'page_id' => 1, 'viewport_width' => 1366],
+        ];
+        $findings = [
+            $this->finding('low', 'Иконки квадратами', ['id' => 40, 'source' => 'ai', 'category' => 'layout',
+                'page_id' => 1, 'ai_result_id' => 8, 'evidence' => ['screenshot_ids' => [32]]]),
+            $this->finding('high', 'Слайдер пустой', ['id' => 41, 'source' => 'ai', 'category' => 'layout',
+                'page_id' => 1, 'ai_result_id' => 8, 'details' => 'Вместо слайдера белое поле.',
+                'evidence' => ['screenshot_ids' => [31, 32, 404]]]),
+            $this->finding('critical', 'Старый запуск', ['id' => 42, 'source' => 'ai', 'category' => 'layout',
+                'page_id' => 1, 'ai_result_id' => 5, 'evidence' => ['screenshot_ids' => [31]]]),
+        ];
+        $aiResults = [
+            $this->visualResult(5, 'ok', '2026-11-15 10:00:00', ['rejected' => 4]),
+            $this->visualResult(7, 'ok', '2026-11-16 12:01:00', ['rejected' => 1]),
+            $this->visualResult(8, 'ok', '2026-11-16 12:02:00', ['rejected' => 2]),
+        ];
+
+        $report = buildReport($diagnostic, $findings, [], $pages, $screenshots, $aiResults);
+        $block = $report['aiVisual'];
+
+        $this->assertSame(0, $report['findingCount'], 'ИИ-поломок нет в «Находках»');
+        $this->assertSame('done', $block['state']);
+        $this->assertNull($block['warning']);
+        $this->assertStringContainsString((string) AI_VISUAL_CROP_HEIGHT_PX, $block['cropNote']);
+        $this->assertSame(['Слайдер пустой', 'Иконки квадратами'], array_column($block['issues'], 'title'));
+        $issue = $block['issues'][0];
+        $this->assertSame('Главная: https://shop.ru/', $issue['page']);
+        $this->assertSame([360, 1366], array_column($issue['gallery']['screenshots'], 'width'));
+        $this->assertSame('/screenshots/31/thumb', $issue['gallery']['screenshots'][0]['thumbUrl']);
+        $this->assertSame('screenshot-layout-41-31', $issue['gallery']['screenshots'][0]['modalId']);
+        $this->assertSame(3, $block['rejected']);
+        $this->assertSame(
+            ['model' => 'qwen/qwen4-max', 'date' => '16.11.2026 12:02', 'tokensIn' => '2000', 'tokensOut' => '200'],
+            $block['meta']
+        );
+    }
+
+    public function testAiVisualWarnsAboutUncheckedPagesAndShowsSkippedAndFailedReasons(): void
+    {
+        $message = buildVisualStepMessage(0, 1, 2, 0, ['https://shop.ru/cart — RouterAI: 500'], 0);
+        $partial = buildReport(
+            $this->diagnostic('done', [$this->step('ai_visual', 'done', $message) + ['started_at' => '2026-11-16 12:00:00']]),
+            [],
+            [],
+            []
+        )['aiVisual'];
+        $this->assertSame($message, $partial['warning']);
+        $this->assertSame([], $partial['issues']);
+
+        $skipped = buildReport(
+            $this->diagnostic('done', [$this->step('ai_visual', 'skipped', AI_VISUAL_NO_SCREENSHOTS)]),
+            [],
+            [],
+            []
+        )['aiVisual'];
+        $this->assertSame('skipped', $skipped['state']);
+        $this->assertSame(AI_VISUAL_NO_SCREENSHOTS, $skipped['message']);
+        $this->assertNull($skipped['meta']);
+
+        $failed = buildReport(
+            $this->diagnostic('done', [$this->step('ai_visual', 'failed', 'Модель text/only не понимает картинки')]),
+            [],
+            [],
+            []
+        )['aiVisual'];
+        $this->assertSame('failed', $failed['state']);
+        $this->assertSame('Модель text/only не понимает картинки', $failed['message']);
+        $this->assertNull($failed['warning']);
+
+        $this->assertNull(buildReport($this->diagnostic(), [], [], [])['aiVisual'], 'Нет шага ai_visual — нет карточки');
+    }
+
+    /**
+     * @param array<string, mixed>|null $parsed
+     * @return array<string, mixed>
+     */
+    private function visualResult(int $id, string $status, string $createdAt, ?array $parsed): array
+    {
+        return ['id' => $id, 'task' => 'visual', 'model' => 'qwen/qwen4-max', 'status' => $status,
+            'parsed_json' => $parsed, 'error_message' => null, 'tokens_in' => 1000, 'tokens_out' => 100,
+            'created_at' => $createdAt];
+    }
+
     /**
      * @return array<string, mixed>
      */

@@ -78,9 +78,12 @@ function makeFinding(
 
 /**
  * Находка от ИИ: `source = ai`, ссылки на факты в `evidence` (`{"finding_ids": [..], "stack_ids": [..]}`),
- * `ai_result_id` — ответ ИИ, который её дал. Fingerprint — по заголовку без регистра и лишних пробелов.
+ * `ai_result_id` — ответ ИИ, который её дал. Fingerprint — по заголовку без регистра и лишних пробелов
+ * (и по странице, если она задана: поломка вёрстки на разных страницах — разные находки).
  *
  * @param array<string, list<int>> $evidence ссылки на факты (уже проверенные `validateAiEvidence()`)
+ * @param string|null              $location адрес страницы (поломка вёрстки) или null
+ * @param int|null                 $pageId   `checked_pages.id` или null
  * @return array{page_id: ?int, source: string, category: string, severity: string, title: string,
  *               details: ?string, location: ?string, evidence: array, fingerprint: string, ai_result_id: int}
  * @throws InvalidArgumentException неизвестная категория или серьёзность
@@ -91,10 +94,12 @@ function makeAiFinding(
     ?string $details,
     string $severity,
     array $evidence,
-    int $aiResultId
+    int $aiResultId,
+    ?string $location = null,
+    ?int $pageId = null
 ): array {
     $key = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', $title)));
-    $finding = makeFinding($category, $title, null, $key, $details, $evidence, null, $severity);
+    $finding = makeFinding($category, $title, $location, $key, $details, $evidence, $pageId, $severity);
 
     return ['source' => FINDING_SOURCE_AI, 'ai_result_id' => $aiResultId] + $finding;
 }

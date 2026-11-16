@@ -120,6 +120,17 @@ final class FindingFactoryTest extends TestCase
         );
     }
 
+    public function testLayoutAiFindingKeepsPageAndDiffersByPage(): void
+    {
+        $home = makeAiFinding('layout', 'Слайдер пустой', null, 'high', ['screenshot_ids' => [31]], 8, 'https://shop.ru/', 1);
+        $cart = makeAiFinding('layout', 'Слайдер пустой', null, 'high', ['screenshot_ids' => [41]], 8, 'https://shop.ru/cart', 2);
+
+        $this->assertSame('https://shop.ru/', $home['location']);
+        $this->assertSame(1, $home['page_id']);
+        $this->assertSame(['screenshot_ids' => [31]], $home['evidence']);
+        $this->assertNotSame($home['fingerprint'], $cart['fingerprint']);
+    }
+
     public function testAiFindingRejectsUnknownSeverity(): void
     {
         $this->expectException(InvalidArgumentException::class);
