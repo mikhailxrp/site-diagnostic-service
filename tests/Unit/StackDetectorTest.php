@@ -123,6 +123,43 @@ final class StackDetectorTest extends TestCase
         $this->assertNull($this->find($items, 'theme', 'storefront-child')['version']);
     }
 
+    /**
+     * Как на wpbeginner.com: первым идёт `?ver=` встроенной библиотеки (jquery.validate 1.21.0), а версия плагина —
+     * у его собственных файлов (2.0.3).
+     */
+    public function testPluginVersionIgnoresBundledLibraries(): void
+    {
+        $items = $this->detect('wordpress-versions');
+
+        $this->assertSame('2.0.3', $this->find($items, 'plugin', 'wpforms')['version']);
+        $this->assertSame('2.1.0', $this->find($items, 'theme', 'shopline')['version'], 'vendor-файл темы не голосует');
+        $this->assertNull($this->find($items, 'plugin', 'plain-plugin')['version'], 'только файл плагина jQuery — версии нет');
+    }
+
+    public function testOwnFileOutweighsOtherAssetAndTieGivesNoVersion(): void
+    {
+        $items = $this->detect('wordpress-versions');
+
+        $this->assertSame('3.1.0', $this->find($items, 'plugin', 'own-wins')['version']);
+        $this->assertNull($this->find($items, 'plugin', 'tie-plugin')['version'], 'ничья 1.0.0 / 1.2.0 — версия неизвестна');
+    }
+
+    public function testLibraryInThemeFolderDoesNotTakeThemeVersion(): void
+    {
+        $items = $this->detect('wordpress-versions');
+
+        $this->assertNull($this->find($items, 'js_library', 'Swiper')['version'], '?ver= темы — не версия Swiper');
+        $this->assertNull($this->find($items, 'js_library', 'Bootstrap')['version']);
+        $this->assertSame('3.7.1', $this->find($items, 'js_library', 'jQuery')['version'], 'wp-includes — версия библиотеки');
+    }
+
+    public function testPickVotedVersion(): void
+    {
+        $this->assertSame('2.0.3', pickVotedVersion(['1.21.0' => 1, '2.0.3' => 3]));
+        $this->assertNull(pickVotedVersion(['1.0.0' => 1, '1.2.0' => 1]));
+        $this->assertNull(pickVotedVersion([]));
+    }
+
     public function testAssetVersionIsNotThemeVersionOutsideWordPress(): void
     {
         // у Битрикса `?ver=1.09` — версия отдельного файла шаблона, а не шаблона

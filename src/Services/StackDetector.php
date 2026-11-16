@@ -31,6 +31,22 @@ const STACK_VERSION_QUERY_KEYS = ['ver', 'v', 'version'];
 
 const STACK_CATEGORY_ORDER = ['cms', 'plugin', 'theme', 'server', 'php', 'cdn', 'js_library', 'analytics', 'other'];
 
+/**
+ * Вес версии. EXACT — meta generator, служебный файл, заголовок: первая такая версия и есть версия элемента.
+ * Версии ассетов (тема / плагин / библиотека) голосуют: OWN — файл с именем элемента или версия в имени / пути
+ * библиотеки, ASSET — `?ver=` любого другого файла. Ничья разных версий → версия неизвестна.
+ */
+const STACK_VERSION_WEIGHT_EXACT = 3;
+const STACK_VERSION_WEIGHT_OWN   = 2;
+const STACK_VERSION_WEIGHT_ASSET = 1;
+
+/** Файл в папке сторонних библиотек темы / плагина — его `?ver=` не версия темы / плагина */
+const STACK_VENDOR_PATH_PATTERN = '~/(?:lib|libs|vendor|vendors|node_modules|bower_components|third-party|third_party|external|externals)/~i';
+/** Плагины jQuery (`jquery.validate.min.js`, `jquery-ui.min.js`) — тоже сторонние библиотеки */
+const STACK_JQUERY_PLUGIN_FILE_PATTERN = '~/jquery[.-][^/]+$~i';
+/** Окончания slug, которых нет в именах файлов: `wpforms-lite` → `wpforms.min.js` */
+const STACK_SLUG_EDITION_PATTERN = '~-(?:lite|pro|premium|free)$~i';
+
 /** Категории, у которых версия из `?ver=` может оказаться версией CMS (WordPress подставляет её по умолчанию) */
 const STACK_INHERITED_VERSION_CATEGORIES = ['theme', 'plugin', 'js_library'];
 
@@ -64,8 +80,13 @@ function collectStackItems(array $home, array $parsed, array $signatures): array
 
     $items = detectServerStack([], $headers, $signatures);
     $items = detectPlatforms($items, $headers, $parsed, $urls, $body, $signatures['platforms'] ?? []);
-    $items = detectThemesAndPlugins($items, $urls, $signatures['platforms'] ?? []);
-    $items = detectLibraries($items, [...$parsed['scripts'], ...$parsed['styles']], $signatures['libraries'] ?? []);
+    $items = detectThemesAndPlugins($items, $urls, $signatures['platforms'] ?? [], $signatures['libraries'] ?? []);
+    $items = detectLibraries(
+        $items,
+        [...$parsed['scripts'], ...$parsed['styles']],
+        $signatures['libraries'] ?? [],
+        $signatures['platforms'] ?? []
+    );
 
     return detectAnalytics($items, $body, $signatures['analytics'] ?? []);
 }
@@ -87,7 +108,8 @@ function collectResourceUrls(array $parsed): array
 
 /**
  * Добавляет признак элементу (создаёт элемент, если его нет). Признак с тем же ключом не суммируется;
- * версия заполняется, только если ещё неизвестна; источники — без повторов, не больше `STACK_EVIDENCE_MAX_ITEMS`.
+ * точная версия (вес EXACT) заполняется, только если ещё неизвестна, версии ассетов копят голоса
+ * (`pickVotedVersion()`); источники — без повторов, не больше `STACK_EVIDENCE_MAX_ITEMS`.
  *
  * @param array<string, mixed> $base category, name, key?, parent?
  */
@@ -98,7 +120,8 @@ function addStackSignal(
     int $weight,
     string $source,
     string $detail,
-    ?string $version = null
+    ?string $version = null,
+    int $versionWeight = STACK_VERSION_WEIGHT_EXACT
 ): array {
     $id = stackItemId($base['category'], $base['name']);
     $item = $items[$id] ?? [
@@ -107,12 +130,19 @@ function addStackSignal(
         'category' => $base['category'],
         'name'     => $base['name'],
         'version'  => null,
+        'votes'    => [],
         'signals'  => [],
         'evidence' => [],
     ];
 
     $item['signals'][$signalKey] = max($item['signals'][$signalKey] ?? 0, $weight);
-    $item['version'] ??= ($version !== null && $version !== '' ? $version : null);
+    if ($version !== null && $version !== '') {
+        if ($versionWeight >= STACK_VERSION_WEIGHT_EXACT) {
+            $item['version'] ??= $version;
+        } elseif ($versionWeight > 0) {
+            $item['votes'][$version] = ($item['votes'][$version] ?? 0) + $versionWeight;
+        }
+    }
 
     $detail = mb_substr($detail, 0, STACK_EVIDENCE_DETAIL_MAX_LENGTH);
     $evidenceKey = $source . ':' . $detail;
@@ -123,6 +153,76 @@ function addStackSignal(
     $items[$id] = $item;
 
     return $items;
+}
+
+/**
+ * Версия с наибольшим весом голосов; ничья разных версий или голосов нет → null.
+ *
+ * @param array<string|int, int> $votes версия → сумма весов
+ */
+function pickVotedVersion(array $votes): ?string
+{
+    if ($votes === []) {
+        return null;
+    }
+
+    arsort($votes);
+    $weights = array_values($votes);
+    if (isset($weights[1]) && $weights[1] === $weights[0]) {
+        return null;
+    }
+
+    return (string) array_key_first($votes);
+}
+
+/**
+ * Вес `?ver=` файла темы / плагина: 0 — файл сторонней библиотеки (его версия — не версия темы / плагина),
+ * OWN — в имени файла есть имя темы / плагина, иначе ASSET.
+ *
+ * @param array<string, array> $libraries сигнатуры `libraries`
+ */
+function rateAssetVersion(string $url, string $slug, array $libraries): int
+{
+    $path = (string) parse_url($url, PHP_URL_PATH);
+    if (preg_match(STACK_VENDOR_PATH_PATTERN, $path) === 1 || preg_match(STACK_JQUERY_PLUGIN_FILE_PATTERN, $path) === 1) {
+        return 0;
+    }
+    foreach ($libraries as $library) {
+        foreach ($library['files'] ?? [] as $pattern) {
+            if (preg_match($pattern, $path) === 1) {
+                return 0;
+            }
+        }
+    }
+
+    $file = normalizeStackFileName((string) preg_replace('~\.(?:min\.)?(?:js|css)$~i', '', basename($path)));
+    $name = normalizeStackFileName((string) preg_replace(STACK_SLUG_EDITION_PATTERN, '', $slug));
+
+    return $name !== '' && str_contains($file, $name) ? STACK_VERSION_WEIGHT_OWN : STACK_VERSION_WEIGHT_ASSET;
+}
+
+/** Только буквы и цифры в нижнем регистре: `contact-form-7` и `contactForm7` — одно и то же */
+function normalizeStackFileName(string $name): string
+{
+    return (string) preg_replace('~[^a-z0-9]~', '', strtolower($name));
+}
+
+/**
+ * Файл лежит в папке темы / плагина какой-либо CMS: `?ver=` у него ставит тема / плагин, а не библиотека.
+ *
+ * @param array<string, array> $platforms
+ */
+function isThemeOrPluginAsset(string $url, array $platforms): bool
+{
+    foreach ($platforms as $platform) {
+        foreach ([...($platform['themes'] ?? []), ...($platform['plugins'] ?? [])] as $pattern) {
+            if (preg_match($pattern, $url) === 1) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 function stackItemId(string $category, string $name): string
@@ -314,7 +414,7 @@ function findFirstMatch(array $values, string $pattern): ?string
  *
  * @param list<string> $urls
  */
-function detectThemesAndPlugins(array $items, array $urls, array $platforms): array
+function detectThemesAndPlugins(array $items, array $urls, array $platforms, array $libraries = []): array
 {
     $pluginPlatforms = [];
     foreach ($platforms as $key => $platform) {
@@ -351,7 +451,8 @@ function detectThemesAndPlugins(array $items, array $urls, array $platforms): ar
 
                     $weight = isset($items[stackItemId($base['category'], $base['name'])]) ? STACK_WEIGHT_WEAK : STACK_WEIGHT_FIRST;
                     $version = !empty($platform['asset_versions']) ? extractQueryVersion($url) : null;
-                    $items = addStackSignal($items, $base, 'url:' . $url, $weight, 'url', $url, $version);
+                    $versionWeight = $version !== null ? rateAssetVersion($url, $name, $libraries) : 0;
+                    $items = addStackSignal($items, $base, 'url:' . $url, $weight, 'url', $url, $version, $versionWeight);
                     break;
                 }
             }
@@ -378,9 +479,13 @@ function isIgnoredStackName(string $name, array $ignorePatterns): bool
 // ─── Библиотеки и аналитика ────────────────────────────────────────────────────
 
 /**
- * @param list<string> $urls адреса скриптов и стилей
+ * Версия библиотеки: из имени файла или пути (вес OWN), иначе `?ver=` (вес ASSET) — кроме файла в папке темы /
+ * плагина: там `?ver=` обычно версия темы / плагина.
+ *
+ * @param list<string>         $urls      адреса скриптов и стилей
+ * @param array<string, array> $platforms сигнатуры платформ (папки тем и плагинов)
  */
-function detectLibraries(array $items, array $urls, array $libraries): array
+function detectLibraries(array $items, array $urls, array $libraries, array $platforms = []): array
 {
     foreach (array_values(array_unique($urls)) as $url) {
         $path = (string) parse_url($url, PHP_URL_PATH);
@@ -399,13 +504,36 @@ function detectLibraries(array $items, array $urls, array $libraries): array
 
             $base = ['key' => (string) $libraryKey, 'category' => 'js_library', 'name' => $library['name']];
             $weight = isset($items[stackItemId('js_library', $library['name'])]) ? STACK_WEIGHT_WEAK : STACK_WEIGHT_FIRST;
-            $version = ($match[1] ?? '') !== '' ? $match[1] : extractUrlVersion($url);
-            $items = addStackSignal($items, $base, 'url:' . $url, $weight, 'url', $url, $version);
+            [$version, $versionWeight] = rateLibraryVersion($url, $match[1] ?? '', $platforms);
+            $items = addStackSignal($items, $base, 'url:' . $url, $weight, 'url', $url, $version, $versionWeight);
             break;
         }
     }
 
     return $items;
+}
+
+/**
+ * @param array<string, array> $platforms
+ * @return array{0: ?string, 1: int} версия и её вес
+ */
+function rateLibraryVersion(string $url, string $fileVersion, array $platforms): array
+{
+    if ($fileVersion !== '') {
+        return [$fileVersion, STACK_VERSION_WEIGHT_OWN];
+    }
+
+    $pathVersion = extractPathVersion($url);
+    if ($pathVersion !== null) {
+        return [$pathVersion, STACK_VERSION_WEIGHT_OWN];
+    }
+
+    $queryVersion = extractQueryVersion($url);
+    if ($queryVersion === null || isThemeOrPluginAsset($url, $platforms)) {
+        return [null, 0];
+    }
+
+    return [$queryVersion, STACK_VERSION_WEIGHT_ASSET];
 }
 
 function detectAnalytics(array $items, string $body, array $analytics): array
@@ -429,17 +557,17 @@ function detectAnalytics(array $items, string $body, array $analytics): array
  */
 function extractUrlVersion(string $url): ?string
 {
-    $version = extractQueryVersion($url);
-    if ($version !== null) {
-        return $version;
-    }
+    return extractQueryVersion($url) ?? extractPathVersion($url);
+}
 
+/**
+ * Версия из пути: `/3.6.0/`, `@3.6.0/`.
+ */
+function extractPathVersion(string $url): ?string
+{
     $path = (string) parse_url($url, PHP_URL_PATH);
-    if (preg_match('~[@/]v?(' . STACK_VERSION_PATTERN . ')/~', $path, $match) === 1) {
-        return $match[1];
-    }
 
-    return null;
+    return preg_match('~[@/]v?(' . STACK_VERSION_PATTERN . ')/~', $path, $match) === 1 ? $match[1] : null;
 }
 
 /**
@@ -521,6 +649,10 @@ function applyVersionProbe(array $items, string $platformKey, string $url, strin
  */
 function finalizeStackItems(array $items): array
 {
+    foreach ($items as $id => $item) {
+        $items[$id]['version'] = $item['version'] ?? pickVotedVersion($item['votes'] ?? []);
+    }
+
     $cmsVersions = [];
     foreach ($items as $item) {
         if ($item['category'] === 'cms' && $item['version'] !== null) {
