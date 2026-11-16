@@ -1,0 +1,1110 @@
+{
+    "resultsPerPage": 7,
+    "startIndex": 0,
+    "totalResults": 7,
+    "format": "NVD_CVE",
+    "version": "2.0",
+    "timestamp": "2026-11-16T06:03:48.261",
+    "vulnerabilities": [
+        {
+            "cve": {
+                "id": "CVE-2025-1746",
+                "sourceIdentifier": "cve-coordination@incibe.es",
+                "published": "2025-02-28T14:15:34.943",
+                "lastModified": "2026-06-17T08:39:42.330",
+                "vulnStatus": "Analyzed",
+                "cveTags": [],
+                "descriptions": [
+                    {
+                        "lang": "en",
+                        "value": "Cross-Site Scripting vulnerability in OpenCart versions prior to 4.1.0. This vulnerability allows an attacker to execute JavaScript code in the victim's browser by sending the victim a malicious URL using the search in the /product/search endpoint. This vulnerability could be exploited to steal sensitive user data, such as session cookies, or to perform actions on behalf of the user."
+                    },
+                    {
+                        "lang": "es",
+                        "value": "Vulnerabilidad de tipo Cross-Site Scripting en versiones de OpenCart anteriores a la 4.1.0. Esta vulnerabilidad permite a un atacante ejecutar código JavaScript en el navegador de la víctima enviándole una URL maliciosa mediante la búsqueda en el endpoint /product/search. Esta vulnerabilidad podría aprovecharse para robar datos confidenciales del usuario, como cookies de sesión, o para realizar acciones en nombre del usuario."
+                    }
+                ],
+                "affected": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "affectedData": [
+                            {
+                                "vendor": "OpenCart",
+                                "product": "OpenCart",
+                                "defaultStatus": "unaffected",
+                                "versions": [
+                                    {
+                                        "version": "0",
+                                        "lessThan": "4.1.0",
+                                        "versionType": "custom",
+                                        "status": "affected"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "metrics": {
+                    "cvssMetricV31": [
+                        {
+                            "source": "cve-coordination@incibe.es",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+                                "baseScore": 6.1,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "LOW",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 2.7
+                        },
+                        {
+                            "source": "nvd@nist.gov",
+                            "type": "Primary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+                                "baseScore": 6.1,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "LOW",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 2.7
+                        }
+                    ],
+                    "ssvcV203": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "ssvcData": {
+                                "timestamp": "2025-02-28T14:32:22.709367Z",
+                                "id": "CVE-2025-1746",
+                                "options": [
+                                    {
+                                        "exploitation": "none"
+                                    },
+                                    {
+                                        "automatable": "no"
+                                    },
+                                    {
+                                        "technicalImpact": "partial"
+                                    }
+                                ],
+                                "role": "CISA Coordinator",
+                                "version": "2.0.3"
+                            }
+                        }
+                    ]
+                },
+                "weaknesses": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "type": "Secondary",
+                        "description": [
+                            {
+                                "lang": "en",
+                                "value": "CWE-79"
+                            }
+                        ]
+                    }
+                ],
+                "configurations": [
+                    {
+                        "nodes": [
+                            {
+                                "operator": "OR",
+                                "negate": false,
+                                "cpeMatch": [
+                                    {
+                                        "vulnerable": true,
+                                        "criteria": "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*",
+                                        "versionEndExcluding": "4.1.0.0",
+                                        "matchCriteriaId": "2116B420-510D-4FAC-8713-881211691BB4"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "references": [
+                    {
+                        "url": "https://www.incibe.es/incibe-cert/alerta-temprana/avisos/multiples-vulnerabilidades-en-opencart",
+                        "source": "cve-coordination@incibe.es",
+                        "tags": [
+                            "Third Party Advisory"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "cve": {
+                "id": "CVE-2025-1747",
+                "sourceIdentifier": "cve-coordination@incibe.es",
+                "published": "2025-02-28T14:15:35.480",
+                "lastModified": "2026-06-17T08:39:42.437",
+                "vulnStatus": "Analyzed",
+                "cveTags": [],
+                "descriptions": [
+                    {
+                        "lang": "en",
+                        "value": "HTML injection vulnerabilities in OpenCart versions prior to 4.1.0. These vulnerabilities could allow an attacker to modify the HTML of the victim's browser by sending a malicious URL and modifying the parameter name in /account/login."
+                    },
+                    {
+                        "lang": "es",
+                        "value": "Vulnerabilidades de inyección de HTML en versiones de OpenCart anteriores a la 4.1.0. Estas vulnerabilidades podrían permitir a un atacante modificar el HTML del navegador de la víctima enviando una URL maliciosa y modificando el nombre del parámetro en /account/login."
+                    }
+                ],
+                "affected": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "affectedData": [
+                            {
+                                "vendor": "OpenCart",
+                                "product": "OpenCart",
+                                "defaultStatus": "unaffected",
+                                "versions": [
+                                    {
+                                        "version": "0",
+                                        "lessThan": "4.1.0",
+                                        "versionType": "custom",
+                                        "status": "affected"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "metrics": {
+                    "cvssMetricV31": [
+                        {
+                            "source": "cve-coordination@incibe.es",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                                "baseScore": 4.7,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 1.4
+                        },
+                        {
+                            "source": "nvd@nist.gov",
+                            "type": "Primary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                                "baseScore": 4.7,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 1.4
+                        }
+                    ],
+                    "ssvcV203": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "ssvcData": {
+                                "timestamp": "2025-02-28T14:28:58.571607Z",
+                                "id": "CVE-2025-1747",
+                                "options": [
+                                    {
+                                        "exploitation": "none"
+                                    },
+                                    {
+                                        "automatable": "no"
+                                    },
+                                    {
+                                        "technicalImpact": "partial"
+                                    }
+                                ],
+                                "role": "CISA Coordinator",
+                                "version": "2.0.3"
+                            }
+                        }
+                    ]
+                },
+                "weaknesses": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "type": "Secondary",
+                        "description": [
+                            {
+                                "lang": "en",
+                                "value": "CWE-79"
+                            }
+                        ]
+                    }
+                ],
+                "configurations": [
+                    {
+                        "nodes": [
+                            {
+                                "operator": "OR",
+                                "negate": false,
+                                "cpeMatch": [
+                                    {
+                                        "vulnerable": true,
+                                        "criteria": "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*",
+                                        "versionEndExcluding": "4.1.0.0",
+                                        "matchCriteriaId": "2116B420-510D-4FAC-8713-881211691BB4"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "references": [
+                    {
+                        "url": "https://www.incibe.es/incibe-cert/alerta-temprana/avisos/multiples-vulnerabilidades-en-opencart",
+                        "source": "cve-coordination@incibe.es",
+                        "tags": [
+                            "Third Party Advisory"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "cve": {
+                "id": "CVE-2025-1748",
+                "sourceIdentifier": "cve-coordination@incibe.es",
+                "published": "2025-02-28T14:15:35.617",
+                "lastModified": "2026-06-17T08:39:42.540",
+                "vulnStatus": "Analyzed",
+                "cveTags": [],
+                "descriptions": [
+                    {
+                        "lang": "en",
+                        "value": "HTML injection vulnerabilities in OpenCart versions prior to 4.1.0. These vulnerabilities could allow an attacker to modify the HTML of the victim's browser by sending a malicious URL and modifying the parameter name in /account/register."
+                    },
+                    {
+                        "lang": "es",
+                        "value": "Vulnerabilidades de inyección de HTML en versiones de OpenCart anteriores a la 4.1.0. Estas vulnerabilidades podrían permitir a un atacante modificar el HTML del navegador de la víctima enviando una URL maliciosa y modificando el nombre del parámetro en /account/register."
+                    }
+                ],
+                "affected": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "affectedData": [
+                            {
+                                "vendor": "OpenCart",
+                                "product": "OpenCart",
+                                "defaultStatus": "unaffected",
+                                "versions": [
+                                    {
+                                        "version": "0",
+                                        "lessThan": "4.1.0",
+                                        "versionType": "custom",
+                                        "status": "affected"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "metrics": {
+                    "cvssMetricV31": [
+                        {
+                            "source": "cve-coordination@incibe.es",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                                "baseScore": 4.7,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 1.4
+                        },
+                        {
+                            "source": "nvd@nist.gov",
+                            "type": "Primary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                                "baseScore": 4.7,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 1.4
+                        }
+                    ],
+                    "ssvcV203": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "ssvcData": {
+                                "timestamp": "2025-02-28T14:24:55.840507Z",
+                                "id": "CVE-2025-1748",
+                                "options": [
+                                    {
+                                        "exploitation": "none"
+                                    },
+                                    {
+                                        "automatable": "no"
+                                    },
+                                    {
+                                        "technicalImpact": "partial"
+                                    }
+                                ],
+                                "role": "CISA Coordinator",
+                                "version": "2.0.3"
+                            }
+                        }
+                    ]
+                },
+                "weaknesses": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "type": "Secondary",
+                        "description": [
+                            {
+                                "lang": "en",
+                                "value": "CWE-79"
+                            }
+                        ]
+                    }
+                ],
+                "configurations": [
+                    {
+                        "nodes": [
+                            {
+                                "operator": "OR",
+                                "negate": false,
+                                "cpeMatch": [
+                                    {
+                                        "vulnerable": true,
+                                        "criteria": "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*",
+                                        "versionEndExcluding": "4.1.0.0",
+                                        "matchCriteriaId": "2116B420-510D-4FAC-8713-881211691BB4"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "references": [
+                    {
+                        "url": "https://www.incibe.es/incibe-cert/alerta-temprana/avisos/multiples-vulnerabilidades-en-opencart",
+                        "source": "cve-coordination@incibe.es",
+                        "tags": [
+                            "Third Party Advisory"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "cve": {
+                "id": "CVE-2025-1749",
+                "sourceIdentifier": "cve-coordination@incibe.es",
+                "published": "2025-02-28T14:15:35.760",
+                "lastModified": "2026-06-17T08:39:42.647",
+                "vulnStatus": "Analyzed",
+                "cveTags": [],
+                "descriptions": [
+                    {
+                        "lang": "en",
+                        "value": "HTML injection vulnerabilities in OpenCart versions prior to 4.1.0. These vulnerabilities could allow an attacker to modify the HTML of the victim's browser by sending a malicious URL and modifying the parameter name in /account/voucher."
+                    },
+                    {
+                        "lang": "es",
+                        "value": "Vulnerabilidades de inyección HTML en versiones de OpenCart antes de 4.1.0. Estas vulnerabilidades podrían permitir a un atacante modificar el HTML del navegador de la víctima enviando una URL maliciosa y modificando el nombre del parámetro en /account/voucher."
+                    }
+                ],
+                "affected": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "affectedData": [
+                            {
+                                "vendor": "OpenCart",
+                                "product": "OpenCart",
+                                "defaultStatus": "unaffected",
+                                "versions": [
+                                    {
+                                        "version": "0",
+                                        "lessThan": "4.1.0",
+                                        "versionType": "custom",
+                                        "status": "affected"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "metrics": {
+                    "cvssMetricV31": [
+                        {
+                            "source": "cve-coordination@incibe.es",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                                "baseScore": 4.7,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 1.4
+                        },
+                        {
+                            "source": "nvd@nist.gov",
+                            "type": "Primary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                                "baseScore": 4.7,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 1.4
+                        }
+                    ],
+                    "ssvcV203": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "ssvcData": {
+                                "timestamp": "2025-02-28T14:11:46.208812Z",
+                                "id": "CVE-2025-1749",
+                                "options": [
+                                    {
+                                        "exploitation": "none"
+                                    },
+                                    {
+                                        "automatable": "no"
+                                    },
+                                    {
+                                        "technicalImpact": "partial"
+                                    }
+                                ],
+                                "role": "CISA Coordinator",
+                                "version": "2.0.3"
+                            }
+                        }
+                    ]
+                },
+                "weaknesses": [
+                    {
+                        "source": "cve-coordination@incibe.es",
+                        "type": "Secondary",
+                        "description": [
+                            {
+                                "lang": "en",
+                                "value": "CWE-79"
+                            }
+                        ]
+                    }
+                ],
+                "configurations": [
+                    {
+                        "nodes": [
+                            {
+                                "operator": "OR",
+                                "negate": false,
+                                "cpeMatch": [
+                                    {
+                                        "vulnerable": true,
+                                        "criteria": "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*",
+                                        "versionEndExcluding": "4.1.0.0",
+                                        "matchCriteriaId": "2116B420-510D-4FAC-8713-881211691BB4"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "references": [
+                    {
+                        "url": "https://www.incibe.es/incibe-cert/alerta-temprana/avisos/multiples-vulnerabilidades-en-opencart",
+                        "source": "cve-coordination@incibe.es",
+                        "tags": [
+                            "Third Party Advisory"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "cve": {
+                "id": "CVE-2025-45892",
+                "sourceIdentifier": "cve@mitre.org",
+                "published": "2025-07-25T17:15:32.350",
+                "lastModified": "2026-06-17T09:25:49.367",
+                "vulnStatus": "Analyzed",
+                "cveTags": [],
+                "descriptions": [
+                    {
+                        "lang": "en",
+                        "value": "OpenCart version 4.1.0.4 is vulnerable to a Stored Cross-Site Scripting (XSS) attack via the blog editor. The vulnerability arises because input in the blog's editor is not properly sanitized or escaped before being rendered. This allows attackers to inject malicious JavaScript code"
+                    },
+                    {
+                        "lang": "es",
+                        "value": "La versión 4.1.0.4 de OpenCart es vulnerable a un ataque de Cross-Site Scripting (XSS) almacenado a través del editor del blog. Esta vulnerabilidad surge porque la entrada en el editor del blog no se depura ni escapa correctamente antes de ser renderizada. Esto permite a los atacantes inyectar código JavaScript malicioso."
+                    }
+                ],
+                "affected": [
+                    {
+                        "source": "cve@mitre.org",
+                        "affectedData": [
+                            {
+                                "vendor": "n/a",
+                                "product": "n/a",
+                                "versions": [
+                                    {
+                                        "version": "n/a",
+                                        "status": "affected"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "metrics": {
+                    "cvssMetricV31": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+                                "baseScore": 6.1,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "LOW",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 2.7
+                        }
+                    ],
+                    "ssvcV203": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "ssvcData": {
+                                "timestamp": "2025-07-25T20:30:56.123354Z",
+                                "id": "CVE-2025-45892",
+                                "options": [
+                                    {
+                                        "exploitation": "none"
+                                    },
+                                    {
+                                        "automatable": "no"
+                                    },
+                                    {
+                                        "technicalImpact": "partial"
+                                    }
+                                ],
+                                "role": "CISA Coordinator",
+                                "version": "2.0.3"
+                            }
+                        }
+                    ]
+                },
+                "weaknesses": [
+                    {
+                        "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                        "type": "Secondary",
+                        "description": [
+                            {
+                                "lang": "en",
+                                "value": "CWE-79"
+                            }
+                        ]
+                    }
+                ],
+                "configurations": [
+                    {
+                        "nodes": [
+                            {
+                                "operator": "OR",
+                                "negate": false,
+                                "cpeMatch": [
+                                    {
+                                        "vulnerable": true,
+                                        "criteria": "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*",
+                                        "versionEndIncluding": "4.1.0.4",
+                                        "matchCriteriaId": "66F059B7-1969-4F28-B6F7-E4627690F026"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "references": [
+                    {
+                        "url": "https://packetstorm.news/files/id/202886",
+                        "source": "cve@mitre.org",
+                        "tags": [
+                            "Third Party Advisory"
+                        ]
+                    },
+                    {
+                        "url": "https://www.opencart.com",
+                        "source": "cve@mitre.org",
+                        "tags": [
+                            "Product"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "cve": {
+                "id": "CVE-2025-45893",
+                "sourceIdentifier": "cve@mitre.org",
+                "published": "2025-07-25T17:15:32.520",
+                "lastModified": "2026-06-17T09:25:49.530",
+                "vulnStatus": "Analyzed",
+                "cveTags": [],
+                "descriptions": [
+                    {
+                        "lang": "en",
+                        "value": "OpenCart version 4.1.0.4 is vulnerable to a Stored Cross-Site Scripting (XSS) attack via SVG file uploads used in blog posts. The vulnerability arises because SVG files uploaded through the media manager are not properly sanitized. Attackers can craft a malicious SVG file containing embedded JavaScript"
+                    },
+                    {
+                        "lang": "es",
+                        "value": "La versión 4.1.0.4 de OpenCart es vulnerable a un ataque de Cross-Site Scripting (XSS) Almacenado mediante la carga de archivos SVG utilizados en entradas de blog. Esta vulnerabilidad surge porque los archivos SVG subidos a través del gestor de contenido multimedia no se depuran correctamente. Los atacantes pueden manipular un archivo SVG malicioso con JavaScript incrustado."
+                    }
+                ],
+                "affected": [
+                    {
+                        "source": "cve@mitre.org",
+                        "affectedData": [
+                            {
+                                "vendor": "n/a",
+                                "product": "n/a",
+                                "versions": [
+                                    {
+                                        "version": "n/a",
+                                        "status": "affected"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "metrics": {
+                    "cvssMetricV31": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+                                "baseScore": 6.1,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "LOW",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "REQUIRED",
+                                "scope": "CHANGED",
+                                "confidentialityImpact": "LOW",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.8,
+                            "impactScore": 2.7
+                        }
+                    ],
+                    "ssvcV203": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "ssvcData": {
+                                "timestamp": "2025-07-25T20:32:39.322016Z",
+                                "id": "CVE-2025-45893",
+                                "options": [
+                                    {
+                                        "exploitation": "none"
+                                    },
+                                    {
+                                        "automatable": "no"
+                                    },
+                                    {
+                                        "technicalImpact": "partial"
+                                    }
+                                ],
+                                "role": "CISA Coordinator",
+                                "version": "2.0.3"
+                            }
+                        }
+                    ]
+                },
+                "weaknesses": [
+                    {
+                        "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                        "type": "Secondary",
+                        "description": [
+                            {
+                                "lang": "en",
+                                "value": "CWE-79"
+                            }
+                        ]
+                    }
+                ],
+                "configurations": [
+                    {
+                        "nodes": [
+                            {
+                                "operator": "OR",
+                                "negate": false,
+                                "cpeMatch": [
+                                    {
+                                        "vulnerable": true,
+                                        "criteria": "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*",
+                                        "versionEndIncluding": "4.1.0.4",
+                                        "matchCriteriaId": "66F059B7-1969-4F28-B6F7-E4627690F026"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "references": [
+                    {
+                        "url": "https://packetstorm.news/files/id/202886",
+                        "source": "cve@mitre.org",
+                        "tags": [
+                            "Third Party Advisory"
+                        ]
+                    },
+                    {
+                        "url": "https://www.opencart.com",
+                        "source": "cve@mitre.org",
+                        "tags": [
+                            "Product"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "cve": {
+                "id": "CVE-2025-15116",
+                "sourceIdentifier": "cna@vuldb.com",
+                "published": "2025-12-28T03:15:40.400",
+                "lastModified": "2026-10-13T09:10:00.323",
+                "vulnStatus": "Modified",
+                "cveTags": [],
+                "descriptions": [
+                    {
+                        "lang": "en",
+                        "value": "A security flaw has been discovered in OpenCart up to 4.1.0.3. Affected by this issue is some unknown functionality of the component Single-Use Coupon Handler. Performing a manipulation results in race condition. The attack may be initiated remotely. The attack's complexity is rated as high. The exploitation is known to be difficult. The exploit has been released to the public and may be used for attacks. The vendor was contacted early about this disclosure but did not respond in any way."
+                    },
+                    {
+                        "lang": "es",
+                        "value": "Se ha descubierto una falla de seguridad en OpenCart hasta la versión 4.1.0.3. Este problema afecta a alguna funcionalidad desconocida del componente Single-Use Coupon Handler. Realizar manipulación resulta en una condición de carrera. El ataque puede iniciarse remotamente. La complejidad del ataque se califica como alta. Se sabe que la explotación es difícil. El exploit ha sido publicado y puede explotarse. Se contactó al proveedor con antelación sobre esta divulgación, pero no respondió de ninguna manera."
+                    }
+                ],
+                "affected": [
+                    {
+                        "source": "cna@vuldb.com",
+                        "affectedData": [
+                            {
+                                "vendor": "n/a",
+                                "product": "OpenCart",
+                                "cpes": [
+                                    "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*"
+                                ],
+                                "modules": [
+                                    "Single-Use Coupon Handler"
+                                ],
+                                "versions": [
+                                    {
+                                        "version": "4.1.0.0",
+                                        "status": "affected"
+                                    },
+                                    {
+                                        "version": "4.1.0.1",
+                                        "status": "affected"
+                                    },
+                                    {
+                                        "version": "4.1.0.2",
+                                        "status": "affected"
+                                    },
+                                    {
+                                        "version": "4.1.0.3",
+                                        "status": "affected"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "metrics": {
+                    "cvssMetricV40": [
+                        {
+                            "source": "cna@vuldb.com",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "4.0",
+                                "vectorString": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:P/CR:X/IR:X/AR:X/MAV:X/MAC:X/MAT:X/MPR:X/MUI:X/MVC:X/MVI:X/MVA:X/MSC:X/MSI:X/MSA:X/S:X/AU:X/R:X/V:X/RE:X/U:X",
+                                "baseScore": 2.9,
+                                "baseSeverity": "LOW",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "HIGH",
+                                "attackRequirements": "NONE",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "NONE",
+                                "vulnConfidentialityImpact": "NONE",
+                                "vulnIntegrityImpact": "LOW",
+                                "vulnAvailabilityImpact": "NONE",
+                                "subConfidentialityImpact": "NONE",
+                                "subIntegrityImpact": "NONE",
+                                "subAvailabilityImpact": "NONE",
+                                "exploitMaturity": "PROOF_OF_CONCEPT",
+                                "confidentialityRequirement": "NOT_DEFINED",
+                                "integrityRequirement": "NOT_DEFINED",
+                                "availabilityRequirement": "NOT_DEFINED",
+                                "modifiedAttackVector": "NOT_DEFINED",
+                                "modifiedAttackComplexity": "NOT_DEFINED",
+                                "modifiedAttackRequirements": "NOT_DEFINED",
+                                "modifiedPrivilegesRequired": "NOT_DEFINED",
+                                "modifiedUserInteraction": "NOT_DEFINED",
+                                "modifiedVulnConfidentialityImpact": "NOT_DEFINED",
+                                "modifiedVulnIntegrityImpact": "NOT_DEFINED",
+                                "modifiedVulnAvailabilityImpact": "NOT_DEFINED",
+                                "modifiedSubConfidentialityImpact": "NOT_DEFINED",
+                                "modifiedSubIntegrityImpact": "NOT_DEFINED",
+                                "modifiedSubAvailabilityImpact": "NOT_DEFINED",
+                                "Safety": "NOT_DEFINED",
+                                "Automatable": "NOT_DEFINED",
+                                "Recovery": "NOT_DEFINED",
+                                "valueDensity": "NOT_DEFINED",
+                                "vulnerabilityResponseEffort": "NOT_DEFINED",
+                                "providerUrgency": "NOT_DEFINED"
+                            }
+                        }
+                    ],
+                    "cvssMetricV31": [
+                        {
+                            "source": "cna@vuldb.com",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+                                "baseScore": 3.7,
+                                "baseSeverity": "LOW",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "HIGH",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "NONE",
+                                "scope": "UNCHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "NONE"
+                            },
+                            "exploitabilityScore": 2.2,
+                            "impactScore": 1.4
+                        },
+                        {
+                            "source": "nvd@nist.gov",
+                            "type": "Primary",
+                            "cvssData": {
+                                "version": "3.1",
+                                "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L",
+                                "baseScore": 4.8,
+                                "baseSeverity": "MEDIUM",
+                                "attackVector": "NETWORK",
+                                "attackComplexity": "HIGH",
+                                "privilegesRequired": "NONE",
+                                "userInteraction": "NONE",
+                                "scope": "UNCHANGED",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "LOW",
+                                "availabilityImpact": "LOW"
+                            },
+                            "exploitabilityScore": 2.2,
+                            "impactScore": 2.5
+                        }
+                    ],
+                    "cvssMetricV2": [
+                        {
+                            "source": "cna@vuldb.com",
+                            "type": "Secondary",
+                            "cvssData": {
+                                "version": "2.0",
+                                "vectorString": "AV:N/AC:H/Au:N/C:N/I:P/A:N",
+                                "baseScore": 2.6,
+                                "accessVector": "NETWORK",
+                                "accessComplexity": "HIGH",
+                                "authentication": "NONE",
+                                "confidentialityImpact": "NONE",
+                                "integrityImpact": "PARTIAL",
+                                "availabilityImpact": "NONE"
+                            },
+                            "baseSeverity": "LOW",
+                            "exploitabilityScore": 4.9,
+                            "impactScore": 2.9,
+                            "acInsufInfo": false,
+                            "obtainAllPrivilege": false,
+                            "obtainUserPrivilege": false,
+                            "obtainOtherPrivilege": false,
+                            "userInteractionRequired": false
+                        }
+                    ],
+                    "ssvcV203": [
+                        {
+                            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+                            "ssvcData": {
+                                "timestamp": "2025-12-29T16:38:12.484495Z",
+                                "id": "CVE-2025-15116",
+                                "options": [
+                                    {
+                                        "exploitation": "poc"
+                                    },
+                                    {
+                                        "automatable": "no"
+                                    },
+                                    {
+                                        "technicalImpact": "partial"
+                                    }
+                                ],
+                                "role": "CISA Coordinator",
+                                "version": "2.0.3"
+                            }
+                        }
+                    ]
+                },
+                "weaknesses": [
+                    {
+                        "source": "cna@vuldb.com",
+                        "type": "Secondary",
+                        "description": [
+                            {
+                                "lang": "en",
+                                "value": "CWE-362"
+                            }
+                        ]
+                    }
+                ],
+                "configurations": [
+                    {
+                        "nodes": [
+                            {
+                                "operator": "OR",
+                                "negate": false,
+                                "cpeMatch": [
+                                    {
+                                        "vulnerable": true,
+                                        "criteria": "cpe:2.3:a:opencart:opencart:*:*:*:*:*:*:*:*",
+                                        "versionEndIncluding": "4.1.0.3",
+                                        "matchCriteriaId": "4C93A1FC-4858-4F41-A50F-540D8C7F1016"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "references": [
+                    {
+                        "url": "https://gist.github.com/KhanMarshaI/a55f125a55de1c0d4f41e66236027e01",
+                        "source": "cna@vuldb.com",
+                        "tags": [
+                            "Exploit",
+                            "Third Party Advisory"
+                        ]
+                    },
+                    {
+                        "url": "https://gist.github.com/KhanMarshaI/a55f125a55de1c0d4f41e66236027e01#steps-to-reproduce",
+                        "source": "cna@vuldb.com",
+                        "tags": [
+                            "Exploit",
+                            "Third Party Advisory"
+                        ]
+                    },
+                    {
+                        "url": "https://vuldb.com/?ctiid.338494",
+                        "source": "cna@vuldb.com",
+                        "tags": [
+                            "Permissions Required",
+                            "VDB Entry"
+                        ]
+                    },
+                    {
+                        "url": "https://vuldb.com/?id.338494",
+                        "source": "cna@vuldb.com",
+                        "tags": [
+                            "Third Party Advisory",
+                            "VDB Entry"
+                        ]
+                    },
+                    {
+                        "url": "https://vuldb.com/?submit.711745",
+                        "source": "cna@vuldb.com",
+                        "tags": [
+                            "Third Party Advisory",
+                            "VDB Entry"
+                        ]
+                    }
+                ]
+            }
+        }
+    ]
+}

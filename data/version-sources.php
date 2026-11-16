@@ -10,16 +10,33 @@ declare(strict_types=1);
  *   source    — `npm` (package), `packagist` (package), `github` (repo, релизы без alpha / beta / rc),
  *               `wordpress` (ядро), `php` (ветки с php.net), `wp-plugin` (slug; онлайн при диагностике, не в базе);
  *   eol_below — необязательно: версия ниже этой — ветка без поддержки (у PHP ветки берутся с php.net);
- *   retire    — необязательно: имя библиотеки в базе уязвимостей retire.js (шаг `vulnerabilities`).
+ *   retire    — необязательно: имя библиотеки в базе уязвимостей retire.js (шаг `vulnerabilities`);
+ *   nvd_cpe   — необязательно, ядро CMS: шаблоны CPE для онлайн-запроса к NVD (`{version}` — версия без патча,
+ *               `{update}` — патч `pN` или `-`); у Magento два: до покупки Adobe — `magento:magento`,
+ *               после — `adobe:magento` редакции open_source;
+ *   osv       — необязательно, ядро CMS: пакет Packagist для онлайн-запроса к OSV.
  * Плагины WordPress без строки здесь сверяются по имени (slug) автоматически.
  */
 
 return [
     'wordpress'      => ['source' => 'wordpress'],
-    'joomla'         => ['source' => 'github', 'repo' => 'joomla/joomla-cms', 'eol_below' => '5.0.0'],
-    'magento'        => ['source' => 'github', 'repo' => 'magento/magento2', 'eol_below' => '2.4.0'],
-    'prestashop'     => ['source' => 'packagist', 'package' => 'prestashop/prestashop', 'eol_below' => '1.7.0'],
-    'opencart'       => ['source' => 'packagist', 'package' => 'opencart/opencart'],
+    'joomla'         => [
+        'source'  => 'github', 'repo' => 'joomla/joomla-cms', 'eol_below' => '5.0.0',
+        'nvd_cpe' => ['cpe:2.3:a:joomla:joomla\!:{version}'], 'osv' => 'joomla/joomla-cms',
+    ],
+    'magento'        => [
+        'source'  => 'github', 'repo' => 'magento/magento2', 'eol_below' => '2.4.0',
+        'nvd_cpe' => ['cpe:2.3:a:magento:magento:{version}:{update}', 'cpe:2.3:a:adobe:magento:{version}:{update}:*:*:open_source'],
+        'osv'     => 'magento/community-edition',
+    ],
+    'prestashop'     => [
+        'source'  => 'packagist', 'package' => 'prestashop/prestashop', 'eol_below' => '1.7.0',
+        'nvd_cpe' => ['cpe:2.3:a:prestashop:prestashop:{version}'], 'osv' => 'prestashop/prestashop',
+    ],
+    'opencart'       => [
+        'source'  => 'packagist', 'package' => 'opencart/opencart',
+        'nvd_cpe' => ['cpe:2.3:a:opencart:opencart:{version}'], 'osv' => 'opencart/opencart',
+    ],
     'php'            => ['source' => 'php'],
     'woocommerce'    => ['source' => 'wp-plugin', 'slug' => 'woocommerce'],
     'jquery'         => ['source' => 'npm', 'package' => 'jquery', 'eol_below' => '3.0.0', 'retire' => 'jquery'],

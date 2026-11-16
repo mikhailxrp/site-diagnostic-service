@@ -24,6 +24,10 @@ const HTTP_DEFAULT_PORTS = ['http' => 80, 'https' => 443];
 
 const CURL_ERROR_TIMEOUT = 28; // CURLE_OPERATION_TIMEDOUT
 
+/** Внешние API уязвимостей (NVD, OSV): ответ NVD по Magento — около 4 МБ */
+const HTTP_API_TIMEOUT_SECONDS = 30;
+const HTTP_API_MAX_BODY_BYTES  = 20 * 1024 * 1024;
+
 const NANOSECONDS_IN_MILLISECOND = 1_000_000;
 
 /**
@@ -443,4 +447,76 @@ function httpDownloadToFile(string $url, string $path, array $headers, int $time
     }
 
     return ['status' => $status > 0 ? $status : null, 'bytes' => $bytes, 'error' => $error];
+}
+
+/**
+ * Запрос к известному внешнему API (NVD, OSV): GET или POST с JSON-телом, ответ — в память со своим пределом
+ * размера. Только https, редиректы — силами curl и только на https. Для адресов из диагностики не используется:
+ * там нужен `httpRequest()` с проверкой хоста.
+ *
+ * @param array<string, mixed>|null $json null — GET; массив — POST с этим телом в JSON
+ * @return array{status: ?int, body: string, error: ?string}
+ */
+function httpApiRequest(
+    string $url,
+    ?array $json = null,
+    int $timeoutSeconds = HTTP_API_TIMEOUT_SECONDS,
+    int $maxBytes = HTTP_API_MAX_BODY_BYTES
+): array {
+    if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
+        return ['status' => null, 'body' => '', 'error' => 'Запросы к API — только по https.'];
+    }
+
+    $handle = curl_init();
+    if ($handle === false) {
+        return ['status' => null, 'body' => '', 'error' => 'Не удалось запустить curl.'];
+    }
+
+    $body = '';
+    $tooLarge = false;
+    $headers = ['Accept: application/json'];
+    $options = [
+        CURLOPT_URL             => $url,
+        CURLOPT_FOLLOWLOCATION  => true,
+        CURLOPT_MAXREDIRS       => HTTP_MAX_REDIRECTS,
+        CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_CONNECTTIMEOUT  => HTTP_CONNECT_TIMEOUT_SECONDS,
+        CURLOPT_TIMEOUT         => $timeoutSeconds,
+        CURLOPT_USERAGENT       => HTTP_USER_AGENT,
+        CURLOPT_ENCODING        => '',
+        CURLOPT_SSL_VERIFYPEER  => true,
+        CURLOPT_SSL_VERIFYHOST  => 2,
+        CURLOPT_WRITEFUNCTION   => static function ($curl, string $chunk) use (&$body, &$tooLarge, $maxBytes): int {
+            if (strlen($body) + strlen($chunk) > $maxBytes) {
+                $tooLarge = true;
+
+                return 0; // 0 — curl обрывает загрузку
+            }
+            $body .= $chunk;
+
+            return strlen($chunk);
+        },
+    ];
+    if ($json !== null) {
+        $options[CURLOPT_POST] = true;
+        $options[CURLOPT_POSTFIELDS] = json_encode($json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $headers[] = 'Content-Type: application/json';
+    }
+    $options[CURLOPT_HTTPHEADER] = $headers;
+
+    curl_setopt_array($handle, $options);
+    curl_exec($handle);
+
+    $errno = curl_errno($handle);
+    $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+    $error = match (true) {
+        $tooLarge                     => 'Ответ больше предела ' . intdiv($maxBytes, 1024 * 1024) . ' МБ.',
+        $errno === 0                  => null,
+        $errno === CURL_ERROR_TIMEOUT => 'Источник не ответил вовремя: ' . curl_error($handle) . " (curl {$errno})",
+        default                       => curl_error($handle) . " (curl {$errno})",
+    };
+    curl_close($handle);
+
+    return ['status' => $status > 0 ? $status : null, 'body' => $error === null ? $body : '', 'error' => $error];
 }
