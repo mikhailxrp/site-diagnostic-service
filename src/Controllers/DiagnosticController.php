@@ -177,14 +177,33 @@ final class DiagnosticController
         $diagnosticId = (int) $diagnostic['id'];
 
         try {
+            $aiResults = getAiResultsByDiagnostic($diagnosticId);
+
             return buildReport(
                 $diagnostic,
                 getFindingsByDiagnostic($diagnosticId),
                 getStackItemsByDiagnostic($diagnosticId),
                 getCheckedPagesByDiagnostic($diagnosticId),
                 getScreenshotsByDiagnostic($diagnosticId),
-                getAiResultsByDiagnostic($diagnosticId)
+                $aiResults,
+                $aiResults !== [] ? $this->loadAiCatalog($diagnosticId) : null
             );
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Модели RouterAI с ценами для стоимости ИИ-блоков: свежий кэш — без сети. Сбой → null, отчёт строится без сумм.
+     *
+     * @return array<string, array>|null
+     */
+    private function loadAiCatalog(int $diagnosticId): ?array
+    {
+        try {
+            return loadRouterAiModels()['models'];
         } catch (Throwable $e) {
             logException($e, ['diagnostic_id' => $diagnosticId]);
 

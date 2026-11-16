@@ -12,6 +12,8 @@ require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
 require_once ROOT_PATH . '/src/Services/FindingFactory.php';
 require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
 require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
+require_once ROOT_PATH . '/src/Services/Ai/SummaryAnalysis.php';
+require_once ROOT_PATH . '/src/Services/AiModels.php';
 
 /** Статусы диагностики, для которых строится отчёт; при `failed` — частичный (то, что успело собраться) */
 const REPORT_STATUSES         = ['done', 'failed'];
@@ -224,6 +226,16 @@ const REPORT_AI_VISUAL_CROP_NOTE    = 'ИИ смотрел только верх
 const REPORT_AI_VISUAL_GALLERY_TYPE = 'layout-%d'; // id модального окна не совпадёт с галереей «По страницам»
 const REPORT_AI_VISUAL_PAGE_LABEL   = '%s: %s';
 
+/** Блок «Итоговый вывод (ИИ)»: шаг `ai_summary`, ответ ИИ `summary` (итог в `parsed_json`, находок нет) */
+const REPORT_AI_SUMMARY_STEP_CODE     = 'ai_summary';
+const REPORT_AI_SUMMARY_TASK          = 'summary';
+const REPORT_AI_SUMMARY_EVIDENCE_KEYS = ['finding_ids', 'stack_ids', 'ai_finding_ids'];
+const REPORT_AI_FINDING_ANCHOR        = 'ai-finding-%d'; // гипотеза или поломка вёрстки в своей ИИ-карточке
+const REPORT_AI_FINDING_LABEL         = 'ИИ: %s';
+
+/** Стоимость ИИ: по текущей цене модели из каталога RouterAI, поэтому примерная */
+const REPORT_AI_COST_FORMAT = '≈ %s';
+
 /**
  * @param array<string, mixed>       $diagnostic строка `diagnostics` + `steps` (как из getDiagnosticWithSteps())
  * @param list<array<string, mixed>> $findings   из getFindingsByDiagnostic()
@@ -231,11 +243,14 @@ const REPORT_AI_VISUAL_PAGE_LABEL   = '%s: %s';
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
  * @param list<array<string, mixed>> $screenshots из getScreenshotsByDiagnostic()
  * @param list<array<string, mixed>> $aiResults  из getAiResultsByDiagnostic()
+ * @param array<string, array>|null  $catalog    модели RouterAI с ценами (loadRouterAiModels()['models']);
+ *                                               null — стоимость неизвестна
  * @return array{partial: bool, productUrl: ?string, summary: ?array, pagespeed: ?array, pages: list<array>,
  *               findingCount: int,
  *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
  *               stackGroups: list<array>, databases: list<array>, databasesStale: bool, databasesWarning: string,
- *               uncheckedSteps: list<array>, aiProblem: ?array, aiVisual: ?array}
+ *               uncheckedSteps: list<array>, aiProblem: ?array, aiVisual: ?array, aiSummary: ?array,
+ *               aiSpending: ?array}
  */
 function buildReport(
     array $diagnostic,
@@ -243,7 +258,8 @@ function buildReport(
     array $stackItems,
     array $pages,
     array $screenshots = [],
-    array $aiResults = []
+    array $aiResults = [],
+    ?array $catalog = null
 ): array {
     // Находки ИИ — в своих карточках: в «Находках» только факты
     $aiFindings = array_values(array_filter($findings, 'isReportAiFinding'));
@@ -277,8 +293,10 @@ function buildReport(
         'databasesStale'    => in_array(true, array_column($databases, 'stale'), true),
         'databasesWarning'  => sprintf(REPORT_DATABASE_STALE_WARNING, REPORT_DATABASE_STALE_DAYS),
         'uncheckedSteps'    => buildReportUncheckedSteps($diagnostic['steps'] ?? [], $partial),
-        'aiProblem'         => buildReportAiProblem($diagnostic, $aiFindings, $findings, $stackItems, $aiResults),
-        'aiVisual'          => buildReportAiVisual($diagnostic, $aiFindings, $pages, $screenshots, $aiResults),
+        'aiProblem'         => buildReportAiProblem($diagnostic, $aiFindings, $findings, $stackItems, $aiResults, $catalog),
+        'aiVisual'          => buildReportAiVisual($diagnostic, $aiFindings, $pages, $screenshots, $aiResults, $catalog),
+        'aiSummary'         => buildReportAiSummary($diagnostic, $aiFindings, $findings, $stackItems, $aiResults, $catalog),
+        'aiSpending'        => buildReportAiSpending($aiResults, $catalog),
     ];
 }
 
@@ -1282,6 +1300,7 @@ function isReportAiFinding(array $finding): bool
  * @param list<array<string, mixed>> $findings   находки проверок (на них ведут ссылки)
  * @param list<array<string, mixed>> $stackItems
  * @param list<array<string, mixed>> $aiResults
+ * @param array<string, array>|null  $catalog    модели RouterAI с ценами
  * @return array{state: string, message: ?string, complaint: ?string, hypotheses: list<array>, rejected: int,
  *               meta: ?array}|null
  */
@@ -1290,7 +1309,8 @@ function buildReportAiProblem(
     array $aiFindings,
     array $findings,
     array $stackItems,
-    array $aiResults
+    array $aiResults,
+    ?array $catalog = null
 ): ?array {
     $step = null;
     foreach ($diagnostic['steps'] ?? [] as $candidate) {
@@ -1333,7 +1353,7 @@ function buildReportAiProblem(
         'complaint'  => $complaint !== '' ? $complaint : null,
         'hypotheses' => $hypotheses,
         'rejected'   => is_int($parsed['rejected'] ?? null) ? $parsed['rejected'] : 0,
-        'meta'       => $aiResult !== null ? buildReportAiMeta($aiResult) : null,
+        'meta'       => $aiResult !== null ? buildReportAiMeta($aiResult, $catalog) : null,
     ];
 }
 
@@ -1356,16 +1376,28 @@ function findLatestAiResult(array $aiResults, string $task): ?array
 }
 
 /**
- * Куда ведут ссылки: `finding_ids` → заголовок находки, `stack_ids` → название и версия.
+ * Куда ведут ссылки: `finding_ids` → заголовок находки, `stack_ids` → название и версия, `ai_finding_ids` →
+ * «ИИ: заголовок» гипотезы или поломки вёрстки.
  *
  * @param list<array<string, mixed>> $findings
  * @param list<array<string, mixed>> $stackItems
+ * @param list<array<string, mixed>> $aiFindings находки `source = ai`
  * @return array{finding_ids: array<int, array{href: string, label: string}>,
- *               stack_ids: array<int, array{href: string, label: string}>}
+ *               stack_ids: array<int, array{href: string, label: string}>,
+ *               ai_finding_ids: array<int, array{href: string, label: string}>}
  */
-function buildReportEvidenceTargets(array $findings, array $stackItems): array
+function buildReportEvidenceTargets(array $findings, array $stackItems, array $aiFindings = []): array
 {
-    $targets = ['finding_ids' => [], 'stack_ids' => []];
+    $targets = ['finding_ids' => [], 'stack_ids' => [], 'ai_finding_ids' => []];
+    foreach ($aiFindings as $finding) {
+        if (isset($finding['id'])) {
+            $id = (int) $finding['id'];
+            $targets['ai_finding_ids'][$id] = [
+                'href'  => '#' . sprintf(REPORT_AI_FINDING_ANCHOR, $id),
+                'label' => sprintf(REPORT_AI_FINDING_LABEL, (string) $finding['title']),
+            ];
+        }
+    }
     foreach ($findings as $finding) {
         if (isset($finding['id'])) {
             $id = (int) $finding['id'];
@@ -1392,7 +1424,7 @@ function buildReportEvidenceTargets(array $findings, array $stackItems): array
 /**
  * @param array<string, mixed>                                          $finding находка `hypothesis`
  * @param array<string, array<int, array{href: string, label: string}>> $targets
- * @return array{title: string, severityLabel: string, badgeClass: string, details: ?string,
+ * @return array{anchorId: ?string, title: string, severityLabel: string, badgeClass: string, details: ?string,
  *               references: list<array{href: string, label: string}>}
  */
 function buildReportHypothesis(array $finding, array $targets): array
@@ -1400,40 +1432,118 @@ function buildReportHypothesis(array $finding, array $targets): array
     $severity = (string) $finding['severity'];
     $evidence = is_array($finding['evidence'] ?? null) ? $finding['evidence'] : [];
 
+    return [
+        'anchorId'      => isset($finding['id']) ? sprintf(REPORT_AI_FINDING_ANCHOR, (int) $finding['id']) : null,
+        'title'         => (string) $finding['title'],
+        'severityLabel' => REPORT_SEVERITY_LABELS[$severity] ?? $severity,
+        'badgeClass'    => REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL,
+        'details'       => isset($finding['details']) && $finding['details'] !== '' ? (string) $finding['details'] : null,
+        'references'    => buildReportReferences($evidence, REPORT_AI_EVIDENCE_KEYS, $targets),
+    ];
+}
+
+/**
+ * Ссылки «Опирается на» по ключам `evidence` в их порядке. Находку или элемент стека могли удалить: ссылки
+ * в никуда не выводятся.
+ *
+ * @param array<string, mixed>                                          $evidence
+ * @param list<string>                                                  $keys
+ * @param array<string, array<int, array{href: string, label: string}>> $targets
+ * @return list<array{href: string, label: string}>
+ */
+function buildReportReferences(array $evidence, array $keys, array $targets): array
+{
     $references = [];
-    foreach (REPORT_AI_EVIDENCE_KEYS as $key) {
+    foreach ($keys as $key) {
         foreach (is_array($evidence[$key] ?? null) ? $evidence[$key] : [] as $id) {
-            // Находку или элемент стека могли удалить: ссылки в никуда не выводятся
             if (is_int($id) && isset($targets[$key][$id])) {
                 $references[] = $targets[$key][$id];
             }
         }
     }
 
-    return [
-        'title'         => (string) $finding['title'],
-        'severityLabel' => REPORT_SEVERITY_LABELS[$severity] ?? $severity,
-        'badgeClass'    => REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL,
-        'details'       => isset($finding['details']) && $finding['details'] !== '' ? (string) $finding['details'] : null,
-        'references'    => $references,
-    ];
+    return $references;
 }
 
 /**
- * Подпись под ИИ-блоком: модель, дата, токены.
+ * Подпись под ИИ-блоком: модель, дата, токены, примерная стоимость (null — цена неизвестна).
  *
- * @param array<string, mixed> $aiResult строка `ai_results`
- * @return array{model: string, date: ?string, tokensIn: string, tokensOut: string}
+ * @param array<string, mixed>      $aiResult строка `ai_results`
+ * @param array<string, array>|null $catalog  модели RouterAI с ценами
+ * @return array{model: string, date: ?string, tokensIn: string, tokensOut: string, cost: ?string}
  */
-function buildReportAiMeta(array $aiResult): array
+function buildReportAiMeta(array $aiResult, ?array $catalog = null): array
 {
     $created = is_string($aiResult['created_at'] ?? null) ? strtotime($aiResult['created_at']) : false;
+    $cost = calculateReportAiCost([$aiResult], $catalog);
 
     return [
         'model'     => (string) $aiResult['model'],
         'date'      => $created !== false ? date(REPORT_AI_DATE_FORMAT, $created) : null,
         'tokensIn'  => isset($aiResult['tokens_in']) ? (string) $aiResult['tokens_in'] : REPORT_AI_NO_TOKENS,
         'tokensOut' => isset($aiResult['tokens_out']) ? (string) $aiResult['tokens_out'] : REPORT_AI_NO_TOKENS,
+        'cost'      => $cost['unpriced'] === 0 ? formatReportAiCost($cost) : null,
+    ];
+}
+
+/**
+ * Стоимость ответов ИИ по цене моделей из каталога: сумма копеек по ответам с известной ценой, число ответов без
+ * цены (модели нет в каталоге, каталог недоступен), были ли токены вообще.
+ *
+ * @param list<array<string, mixed>> $aiResults строки `ai_results`
+ * @param array<string, array>|null  $catalog
+ * @return array{kopecks: int, unpriced: int, hasTokens: bool}
+ */
+function calculateReportAiCost(array $aiResults, ?array $catalog): array
+{
+    $total = ['kopecks' => 0, 'unpriced' => 0, 'hasTokens' => false];
+    foreach ($aiResults as $aiResult) {
+        $tokensIn = isset($aiResult['tokens_in']) ? (int) $aiResult['tokens_in'] : null;
+        $tokensOut = isset($aiResult['tokens_out']) ? (int) $aiResult['tokens_out'] : null;
+        $total['hasTokens'] = $total['hasTokens'] || ($tokensIn ?? 0) + ($tokensOut ?? 0) > 0;
+
+        $kopecks = calculateAiCostKopecks($tokensIn, $tokensOut, $catalog[(string) ($aiResult['model'] ?? '')] ?? null);
+        if ($kopecks === null) {
+            $total['unpriced']++;
+            continue;
+        }
+        $total['kopecks'] += $kopecks;
+    }
+
+    return $total;
+}
+
+/**
+ * @param array{kopecks: int, unpriced: int, hasTokens: bool} $cost
+ */
+function formatReportAiCost(array $cost): string
+{
+    return sprintf(REPORT_AI_COST_FORMAT, formatAiCost($cost['kopecks'], $cost['hasTokens']));
+}
+
+/**
+ * «Потрачено на ИИ» по диагностике: все ответы `ai_results` (все задачи, все запуски, неудачные тоже — за токены
+ * заплачено). Ответов нет → null, блока нет.
+ *
+ * @param list<array<string, mixed>> $aiResults
+ * @param array<string, array>|null  $catalog
+ * @return array{cost: ?string, unpriced: int, requests: int, tokensIn: string, tokensOut: string}|null
+ */
+function buildReportAiSpending(array $aiResults, ?array $catalog): ?array
+{
+    if ($aiResults === []) {
+        return null;
+    }
+
+    $cost = calculateReportAiCost($aiResults, $catalog);
+    $priced = count($aiResults) - $cost['unpriced'];
+
+    return [
+        'cost'      => $priced > 0 ? formatReportAiCost($cost) : null,
+        'unpriced'  => $cost['unpriced'],
+        'requests'  => count($aiResults),
+        'tokensIn'  => (string) array_sum(array_map('intval', array_column($aiResults, 'tokens_in'))),
+        'tokensOut' => (string) array_sum(array_map('intval', array_column($aiResults, 'tokens_out'))),
     ];
 }
 
@@ -1447,6 +1557,7 @@ function buildReportAiMeta(array $aiResult): array
  * @param list<array<string, mixed>> $pages       из getCheckedPagesByDiagnostic()
  * @param list<array<string, mixed>> $screenshots из getScreenshotsByDiagnostic()
  * @param list<array<string, mixed>> $aiResults
+ * @param array<string, array>|null  $catalog     модели RouterAI с ценами
  * @return array{state: string, message: ?string, warning: ?string, cropNote: string, issues: list<array>,
  *               rejected: int, meta: ?array}|null
  */
@@ -1455,7 +1566,8 @@ function buildReportAiVisual(
     array $aiFindings,
     array $pages,
     array $screenshots,
-    array $aiResults
+    array $aiResults,
+    ?array $catalog = null
 ): ?array {
     $step = findReportStep($diagnostic['steps'] ?? [], REPORT_AI_VISUAL_STEP_CODE);
     if ($step === null) {
@@ -1504,7 +1616,96 @@ function buildReportAiVisual(
         'cropNote' => sprintf(REPORT_AI_VISUAL_CROP_NOTE, AI_VISUAL_CROP_HEIGHT_PX),
         'issues'   => $issues,
         'rejected' => $rejected,
-        'meta'     => buildReportAiRunMeta($runResults),
+        'meta'     => buildReportAiRunMeta($runResults, $catalog),
+    ];
+}
+
+/**
+ * Блок «Итоговый вывод (ИИ)». Нет шага `ai_summary` (диагностика до таска 4 фазы 4) → null, карточки нет.
+ * Шаг `done` — вывод и план ремонта последнего ответа текущего запуска шага со ссылками на факты и ИИ-находки;
+ * `failed` — ошибка; `skipped` / не выполнен — причина.
+ *
+ * @param array<string, mixed>       $diagnostic строка `diagnostics` + `steps`
+ * @param list<array<string, mixed>> $aiFindings находки `source = ai` (на них ведут ссылки `ai_finding_ids`)
+ * @param list<array<string, mixed>> $findings   находки проверок
+ * @param list<array<string, mixed>> $stackItems
+ * @param list<array<string, mixed>> $aiResults
+ * @param array<string, array>|null  $catalog    модели RouterAI с ценами
+ * @return array{state: string, message: ?string, verdict: ?string, severityLabel: ?string, badgeClass: ?string,
+ *               steps: list<array>, without: ?string, rejected: int, meta: ?array}|null
+ */
+function buildReportAiSummary(
+    array $diagnostic,
+    array $aiFindings,
+    array $findings,
+    array $stackItems,
+    array $aiResults,
+    ?array $catalog = null
+): ?array {
+    $step = findReportStep($diagnostic['steps'] ?? [], REPORT_AI_SUMMARY_STEP_CODE);
+    if ($step === null) {
+        return null;
+    }
+
+    $state = match ((string) $step['status']) {
+        REPORT_AI_STATE_DONE   => REPORT_AI_STATE_DONE,
+        REPORT_AI_STATE_FAILED => REPORT_AI_STATE_FAILED,
+        default                => REPORT_AI_STATE_SKIPPED,
+    };
+    $message = isset($step['message']) && $step['message'] !== '' ? (string) $step['message'] : null;
+    $runResults = filterReportRunAiResults($aiResults, REPORT_AI_SUMMARY_TASK, $step['started_at'] ?? null);
+    $aiResult = $runResults !== [] ? $runResults[array_key_last($runResults)] : null;
+    if ($state === REPORT_AI_STATE_FAILED && ($aiResult['status'] ?? null) === REPORT_AI_RESULT_ERROR) {
+        $message = (string) ($aiResult['error_message'] ?? $message);
+    }
+
+    $parsed = $state === REPORT_AI_STATE_DONE && is_array($aiResult['parsed_json'] ?? null) ? $aiResult['parsed_json'] : [];
+    $verdict = is_string($parsed['verdict'] ?? null) && $parsed['verdict'] !== '' ? $parsed['verdict'] : null;
+    $severity = is_string($parsed['severity'] ?? null) ? $parsed['severity'] : null;
+
+    $steps = [];
+    $targets = buildReportEvidenceTargets($findings, $stackItems, $aiFindings);
+    foreach (is_array($parsed['steps'] ?? null) ? $parsed['steps'] : [] as $planStep) {
+        if (is_array($planStep)) {
+            $steps[] = buildReportPlanStep($planStep, count($steps) + 1, $targets);
+        }
+    }
+
+    return [
+        'state'         => $state,
+        'message'       => $state === REPORT_AI_STATE_DONE ? null : ($message ?? REPORT_AI_NOT_RUN_MESSAGE),
+        'verdict'       => $verdict,
+        'severityLabel' => $severity !== null ? (REPORT_SEVERITY_LABELS[$severity] ?? $severity) : null,
+        'badgeClass'    => $severity !== null ? (REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL) : null,
+        'steps'         => $steps,
+        'without'       => $state === REPORT_AI_STATE_DONE
+            ? buildSummaryWithoutNote(findSummaryMissingInputs($diagnostic['steps'] ?? []))
+            : null,
+        'rejected'      => is_int($parsed['rejected'] ?? null) ? $parsed['rejected'] : 0,
+        'meta'          => $aiResult !== null ? buildReportAiMeta($aiResult, $catalog) : null,
+    ];
+}
+
+/**
+ * Шаг плана ремонта для View.
+ *
+ * @param array<string, mixed>                                          $planStep из `parsed_json.steps`
+ * @param array<string, array<int, array{href: string, label: string}>> $targets
+ * @return array{number: int, title: string, action: ?string, severityLabel: string, badgeClass: string,
+ *               references: list<array{href: string, label: string}>}
+ */
+function buildReportPlanStep(array $planStep, int $number, array $targets): array
+{
+    $severity = (string) ($planStep['severity'] ?? AI_SUMMARY_DEFAULT_SEVERITY);
+    $action = is_string($planStep['action'] ?? null) && $planStep['action'] !== '' ? $planStep['action'] : null;
+
+    return [
+        'number'        => $number,
+        'title'         => (string) ($planStep['title'] ?? ''),
+        'action'        => $action,
+        'severityLabel' => REPORT_SEVERITY_LABELS[$severity] ?? $severity,
+        'badgeClass'    => REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL,
+        'references'    => buildReportReferences($planStep, REPORT_AI_SUMMARY_EVIDENCE_KEYS, $targets),
     ];
 }
 
@@ -1548,12 +1749,14 @@ function filterReportRunAiResults(array $aiResults, string $task, mixed $stepSta
 }
 
 /**
- * Подпись под ИИ-блоком из нескольких ответов: модель и дата последнего, токены — сумма. Ответов нет → null.
+ * Подпись под ИИ-блоком из нескольких ответов: модель и дата последнего, токены и стоимость — сумма (хоть у одного
+ * ответа цена неизвестна — стоимость null). Ответов нет → null.
  *
  * @param list<array<string, mixed>> $aiResults
- * @return array{model: string, date: ?string, tokensIn: string, tokensOut: string}|null
+ * @param array<string, array>|null  $catalog
+ * @return array{model: string, date: ?string, tokensIn: string, tokensOut: string, cost: ?string}|null
  */
-function buildReportAiRunMeta(array $aiResults): ?array
+function buildReportAiRunMeta(array $aiResults, ?array $catalog = null): ?array
 {
     if ($aiResults === []) {
         return null;
@@ -1564,6 +1767,8 @@ function buildReportAiRunMeta(array $aiResults): ?array
         $values = array_filter(array_column($aiResults, $column), static fn (mixed $value): bool => $value !== null);
         $meta[$key] = $values !== [] ? (string) array_sum(array_map('intval', $values)) : REPORT_AI_NO_TOKENS;
     }
+    $cost = calculateReportAiCost($aiResults, $catalog);
+    $meta['cost'] = $cost['unpriced'] === 0 ? formatReportAiCost($cost) : null;
 
     return $meta;
 }
@@ -1586,7 +1791,8 @@ function reportSeverityRank(array $finding): int
  * @param array<string, mixed>             $finding       находка `layout`
  * @param array<int, array<string, mixed>> $pageMap       id → строка `checked_pages`
  * @param array<int, array<string, mixed>> $screenshotMap id → строка `screenshots`
- * @return array{title: string, severityLabel: string, badgeClass: string, details: ?string, page: ?string,
+ * @return array{anchorId: ?string, title: string, severityLabel: string, badgeClass: string, details: ?string,
+ *               page: ?string,
  *               gallery: array{screenshots: list<array>, screenshotsEmpty: string, screenshotsNote: ?string}}
  */
 function buildReportLayoutIssue(array $finding, array $pageMap, array $screenshotMap): array
@@ -1612,6 +1818,7 @@ function buildReportLayoutIssue(array $finding, array $pageMap, array $screensho
     }
 
     return [
+        'anchorId'      => isset($finding['id']) ? sprintf(REPORT_AI_FINDING_ANCHOR, (int) $finding['id']) : null,
         'title'         => (string) $finding['title'],
         'severityLabel' => REPORT_SEVERITY_LABELS[$severity] ?? $severity,
         'badgeClass'    => REPORT_SEVERITY_BADGES[$severity] ?? REPORT_BADGE_NEUTRAL,

@@ -108,6 +108,36 @@ final class AiModelsTest extends TestCase
         $this->assertSame('3 844,69', formatAiPrice(384469));
     }
 
+    public function testCalculatesCostInWholeKopecksWithRounding(): void
+    {
+        $model = ['price_in_kopecks' => 16000, 'price_out_kopecks' => 48100]; // 160 / 481 ₽ за 1 млн токенов
+
+        // 7430 × 160 + 2367 × 481 = 2,32727 ₽ → 233 копейки
+        $this->assertSame(233, calculateAiCostKopecks(7430, 2367, $model));
+        // ровно половина копейки округляется вверх: 5000 × 1 ₽ за 1 млн = 0,5 копейки
+        $cheap = ['price_in_kopecks' => 100, 'price_out_kopecks' => 0];
+        $this->assertSame(1, calculateAiCostKopecks(5000, 0, $cheap));
+        $this->assertSame(0, calculateAiCostKopecks(4999, 0, $cheap));
+        $this->assertSame(0, calculateAiCostKopecks(null, null, $model), 'Нет токенов — платить не за что');
+        $this->assertSame(16000, calculateAiCostKopecks(1_000_000, null, $model));
+        $this->assertIsInt(calculateAiCostKopecks(123_456_789, 98_765_432, $model));
+    }
+
+    public function testCostIsUnknownWithoutModelOrPrice(): void
+    {
+        $this->assertNull(calculateAiCostKopecks(100, 100, null));
+        $this->assertNull(calculateAiCostKopecks(100, 100, ['price_in_kopecks' => 16000, 'price_out_kopecks' => null]));
+    }
+
+    public function testFormatsCost(): void
+    {
+        $this->assertSame('4,20 ₽', formatAiCost(420));
+        $this->assertSame('0,05 ₽', formatAiCost(5));
+        $this->assertSame('1 230,05 ₽', formatAiCost(123005));
+        $this->assertSame('< 0,01 ₽', formatAiCost(0));
+        $this->assertSame('0,00 ₽', formatAiCost(0, false));
+    }
+
     public function testFetchesAndCachesList(): void
     {
         $calls = 0;

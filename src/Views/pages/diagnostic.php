@@ -102,6 +102,68 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                             </div>
                         <?php endif; ?>
                         <div class="row row-cards">
+                            <?php if ($report['aiSummary'] !== null) : ?>
+                                <div class="col-12">
+                                    <section class="card" aria-labelledby="report-ai-summary-title">
+                                        <div class="card-status-top bg-purple"></div>
+                                        <div class="card-header">
+                                            <h2 class="card-title" id="report-ai-summary-title">Итоговый вывод (ИИ)</h2>
+                                            <div class="card-actions">
+                                                <span class="badge bg-purple-lt">ИИ</span>
+                                            </div>
+                                        </div>
+                                        <?php if ($report['aiSummary']['state'] === 'done') : ?>
+                                            <div class="card-body border-bottom">
+                                                <?php if ($report['aiSummary']['severityLabel'] !== null) : ?>
+                                                    <div class="mb-2">
+                                                        <span class="badge <?= e($report['aiSummary']['badgeClass']) ?>"><?= e($report['aiSummary']['severityLabel']) ?></span>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php if ($report['aiSummary']['verdict'] !== null) : ?>
+                                                    <p class="text-break mb-0"><?= nl2br(e($report['aiSummary']['verdict']), false) ?></p>
+                                                <?php endif; ?>
+                                                <?php if ($report['aiSummary']['without'] !== null) : ?>
+                                                    <p class="small text-secondary mt-2 mb-0"><?= e($report['aiSummary']['without']) ?></p>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php if ($report['aiSummary']['steps'] === []) : ?>
+                                                <div class="card-body">
+                                                    <p class="text-secondary mb-0">Ни один шаг плана не сослался на факты — отброшено <?= e($report['aiSummary']['rejected']) ?>.</p>
+                                                </div>
+                                            <?php else : ?>
+                                                <ol class="list-group list-group-flush mb-0" aria-label="План ремонта">
+                                                    <?php foreach ($report['aiSummary']['steps'] as $planStep) : ?>
+                                                        <li class="list-group-item">
+                                                            <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                                                                <span class="badge bg-purple-lt">Шаг <?= e($planStep['number']) ?></span>
+                                                                <span class="badge <?= e($planStep['badgeClass']) ?>"><?= e($planStep['severityLabel']) ?></span>
+                                                            </div>
+                                                            <h3 class="h4 mb-1 text-break"><?= e($planStep['title']) ?></h3>
+                                                            <?php if ($planStep['action'] !== null) : ?>
+                                                                <p class="text-secondary mb-2 text-break"><?= nl2br(e($planStep['action']), false) ?></p>
+                                                            <?php endif; ?>
+                                                            <?php if ($planStep['references'] !== []) : ?>
+                                                                <div class="small text-secondary">Опирается на:</div>
+                                                                <ul class="list-unstyled small mb-0">
+                                                                    <?php foreach ($planStep['references'] as $reference) : ?>
+                                                                        <li class="text-break"><a href="<?= e($reference['href']) ?>" class="d-block py-3" data-evidence-link><?= e($reference['label']) ?></a></li>
+                                                                    <?php endforeach; ?>
+                                                                </ul>
+                                                            <?php endif; ?>
+                                                        </li>
+                                                    <?php endforeach; ?>
+                                                </ol>
+                                                <?php if ($report['aiSummary']['rejected'] > 0) : ?>
+                                                    <div class="card-body border-top">
+                                                        <p class="small text-secondary mb-0">Отброшено шагов без ссылок на факты: <?= e($report['aiSummary']['rejected']) ?></p>
+                                                    </div>
+                                                <?php endif; ?>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                        <?php render('components/ai-block', ['aiBlock' => $report['aiSummary']]); ?>
+                                    </section>
+                                </div>
+                            <?php endif; ?>
                             <div class="col-12 col-lg-6">
                                 <section class="card" aria-labelledby="report-summary-title">
                                     <div class="card-header">
@@ -167,6 +229,19 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                             </ul>
                                         <?php endif; ?>
                                     <?php endif; ?>
+                                    <?php if ($report['aiSpending'] !== null) : ?>
+                                        <div class="card-body border-top">
+                                            <div class="datagrid-title">Потрачено на ИИ</div>
+                                            <div class="text-break">
+                                                <?= e($report['aiSpending']['cost'] ?? 'стоимость неизвестна') ?>
+                                                · запросов <?= e($report['aiSpending']['requests']) ?>
+                                                · токены <?= e($report['aiSpending']['tokensIn']) ?> / <?= e($report['aiSpending']['tokensOut']) ?>
+                                            </div>
+                                            <?php if ($report['aiSpending']['cost'] !== null && $report['aiSpending']['unpriced'] > 0) : ?>
+                                                <div class="small text-secondary">Без учёта запросов: <?= e($report['aiSpending']['unpriced']) ?> — цена модели неизвестна.</div>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </section>
                             </div>
                             <div class="col-12 col-lg-6">
@@ -203,6 +278,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                             <?php if ($report['aiProblem'] !== null) : ?>
                                 <div class="col-12">
                                     <section class="card" aria-labelledby="report-ai-problem-title">
+                                        <div class="card-status-top bg-purple"></div>
                                         <div class="card-header">
                                             <h2 class="card-title" id="report-ai-problem-title">Разбор жалобы (ИИ)</h2>
                                             <div class="card-actions">
@@ -225,7 +301,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                             <?php else : ?>
                                                 <ul class="list-group list-group-flush">
                                                     <?php foreach ($report['aiProblem']['hypotheses'] as $hypothesis) : ?>
-                                                        <li class="list-group-item">
+                                                        <li class="list-group-item"<?php if ($hypothesis['anchorId'] !== null) : ?> id="<?= e($hypothesis['anchorId']) ?>"<?php endif; ?>>
                                                             <div class="mb-1">
                                                                 <span class="badge <?= e($hypothesis['badgeClass']) ?>"><?= e($hypothesis['severityLabel']) ?></span>
                                                             </div>
@@ -258,6 +334,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                             <?php if ($report['aiVisual'] !== null) : ?>
                                 <div class="col-12">
                                     <section class="card" aria-labelledby="report-ai-visual-title">
+                                        <div class="card-status-top bg-purple"></div>
                                         <div class="card-header">
                                             <h2 class="card-title" id="report-ai-visual-title">Вёрстка (ИИ)</h2>
                                             <div class="card-actions">
@@ -280,7 +357,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                             <?php else : ?>
                                                 <ul class="list-group list-group-flush">
                                                     <?php foreach ($report['aiVisual']['issues'] as $issue) : ?>
-                                                        <li class="list-group-item">
+                                                        <li class="list-group-item"<?php if ($issue['anchorId'] !== null) : ?> id="<?= e($issue['anchorId']) ?>"<?php endif; ?>>
                                                             <div class="mb-1">
                                                                 <span class="badge <?= e($issue['badgeClass']) ?>"><?= e($issue['severityLabel']) ?></span>
                                                             </div>

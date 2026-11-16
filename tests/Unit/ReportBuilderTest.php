@@ -93,13 +93,14 @@ final class ReportBuilderTest extends TestCase
             $this->aiResult(3, 'ok', ['rejected' => 2]),
         ];
 
-        $block = buildReport($diagnostic, $findings, [$this->stackItem(5)], [], [], $aiResults)['aiProblem'];
+        $block = buildReport($diagnostic, $findings, [$this->stackItem(5)], [], [], $aiResults, $this->catalog())['aiProblem'];
 
         $this->assertSame('done', $block['state']);
         $this->assertNull($block['message']);
         $this->assertSame('Не работает корзина', $block['complaint']);
         $this->assertSame(2, $block['rejected']);
         $this->assertSame(['Корзина падает'], array_column($block['hypotheses'], 'title'));
+        $this->assertSame('ai-finding-20', $block['hypotheses'][0]['anchorId']);
         $this->assertSame(
             [
                 ['href' => '#finding-11', 'label' => 'Fatal error в cart.php'],
@@ -108,7 +109,9 @@ final class ReportBuilderTest extends TestCase
             $block['hypotheses'][0]['references']
         );
         $this->assertSame(
-            ['model' => 'qwen/qwen4-max', 'date' => '16.11.2026 12:30', 'tokensIn' => '1200', 'tokensOut' => '300'],
+            // 1200 × 160 ₽ + 300 × 481 ₽ за 1 млн токенов = 0,3363 ₽ → 34 копейки
+            ['model' => 'qwen/qwen4-max', 'date' => '16.11.2026 12:30', 'tokensIn' => '1200', 'tokensOut' => '300',
+                'cost' => '≈ 0,34 ₽'],
             $block['meta']
         );
     }
@@ -183,11 +186,18 @@ final class ReportBuilderTest extends TestCase
         $this->assertSame([360, 1366], array_column($issue['gallery']['screenshots'], 'width'));
         $this->assertSame('/screenshots/31/thumb', $issue['gallery']['screenshots'][0]['thumbUrl']);
         $this->assertSame('screenshot-layout-41-31', $issue['gallery']['screenshots'][0]['modalId']);
+        $this->assertSame('ai-finding-41', $issue['anchorId']);
         $this->assertSame(3, $block['rejected']);
         $this->assertSame(
-            ['model' => 'qwen/qwen4-max', 'date' => '16.11.2026 12:02', 'tokensIn' => '2000', 'tokensOut' => '200'],
-            $block['meta']
+            ['model' => 'qwen/qwen4-max', 'date' => '16.11.2026 12:02', 'tokensIn' => '2000', 'tokensOut' => '200',
+                'cost' => null],
+            $block['meta'],
+            'Каталога нет — стоимость неизвестна'
         );
+
+        // Стоимость — сумма по ответам запуска, каждый округляется до копейки: 2 × 20,81 → 2 × 21
+        $priced = buildReport($diagnostic, $findings, [], $pages, $screenshots, $aiResults, $this->catalog())['aiVisual'];
+        $this->assertSame('≈ 0,42 ₽', $priced['meta']['cost']);
     }
 
     public function testAiVisualWarnsAboutUncheckedPagesAndShowsSkippedAndFailedReasons(): void
@@ -223,6 +233,157 @@ final class ReportBuilderTest extends TestCase
         $this->assertNull($failed['warning']);
 
         $this->assertNull(buildReport($this->diagnostic(), [], [], [])['aiVisual'], 'Нет шага ai_visual — нет карточки');
+    }
+
+    public function testAiSummaryShowsVerdictAndPlanWithReferencesToFactsAndAiFindings(): void
+    {
+        $diagnostic = $this->diagnostic('done', [
+            $this->step('ai_problem', 'done'),
+            $this->step('ai_visual', 'skipped', AI_VISUAL_NO_SCREENSHOTS),
+            $this->step('ai_summary', 'done', 'Шагов плана: 2.') + ['started_at' => '2026-11-16 12:00:00'],
+        ]);
+        $findings = [
+            $this->finding('high', 'Fatal error в cart.php', ['id' => 11, 'source' => 'check']),
+            $this->finding('critical', 'Корзина падает', ['id' => 20, 'source' => 'ai', 'category' => 'hypothesis',
+                'ai_result_id' => 3, 'evidence' => ['finding_ids' => [11], 'stack_ids' => []]]),
+        ];
+        $aiResults = [
+            $this->summaryResult(9, '2026-11-15 10:00:00', ['verdict' => 'Старый вывод', 'severity' => 'low',
+                'steps' => [], 'rejected' => 0]),
+            $this->summaryResult(10, '2026-11-16 12:05:00', [
+                'verdict'  => 'Корзина не работает: заказы не оформляются.',
+                'severity' => 'critical',
+                'steps'    => [
+                    ['title' => 'Починить cart.php', 'action' => 'Исправить fatal error.', 'severity' => 'critical',
+                        'finding_ids' => [11, 404], 'stack_ids' => [5], 'ai_finding_ids' => [20]],
+                    ['title' => 'Обновить OpenCart', 'action' => '', 'severity' => 'medium',
+                        'finding_ids' => [], 'stack_ids' => [5], 'ai_finding_ids' => []],
+                ],
+                'rejected' => 1,
+            ]),
+        ];
+
+        $report = buildReport($diagnostic, $findings, [$this->stackItem(5)], [], [], $aiResults, $this->catalog());
+        $block = $report['aiSummary'];
+
+        $this->assertSame('done', $block['state']);
+        $this->assertNull($block['message']);
+        $this->assertSame('Корзина не работает: заказы не оформляются.', $block['verdict']);
+        $this->assertSame('Критично', $block['severityLabel']);
+        $this->assertSame(1, $block['rejected']);
+        $this->assertSame('Вывод без проверки вёрстки: эти ИИ-шаги не выполнены.', $block['without']);
+        $this->assertSame([1, 2], array_column($block['steps'], 'number'));
+        $this->assertSame(
+            [
+                ['href' => '#finding-11', 'label' => 'Fatal error в cart.php'],
+                ['href' => '#stack-5', 'label' => 'OpenCart 3.0.2.0'],
+                ['href' => '#ai-finding-20', 'label' => 'ИИ: Корзина падает'],
+            ],
+            $block['steps'][0]['references']
+        );
+        $this->assertNull($block['steps'][1]['action']);
+        $this->assertSame('16.11.2026 12:05', $block['meta']['date']);
+        $this->assertNotNull($block['meta']['cost']);
+        $this->assertSame(1, $report['findingCount'], 'План ремонта не попадает в «Находки»');
+    }
+
+    public function testAiSummaryStatesAndOldDiagnosticWithoutCard(): void
+    {
+        $this->assertNull(buildReport($this->diagnostic(), [], [], [])['aiSummary'], 'Нет шага ai_summary — нет карточки');
+
+        $skipped = buildReport(
+            $this->diagnostic('done', [$this->step('ai_summary', 'skipped', 'Ключ ROUTERAI_API_KEY не задан в .env.')]),
+            [],
+            [],
+            []
+        )['aiSummary'];
+        $this->assertSame('skipped', $skipped['state']);
+        $this->assertSame('Ключ ROUTERAI_API_KEY не задан в .env.', $skipped['message']);
+        $this->assertNull($skipped['meta']);
+        $this->assertNull($skipped['without']);
+
+        $failed = buildReport(
+            $this->diagnostic('done', [$this->step('ai_summary', 'failed', 'коротко')
+                + ['started_at' => '2026-11-16 12:00:00']]),
+            [],
+            [],
+            [],
+            [],
+            [array_replace($this->summaryResult(11, '2026-11-16 12:01:00', null), ['status' => 'error',
+                'error_message' => 'RouterAI отклонил ключ API (401).', 'tokens_in' => null, 'tokens_out' => null])]
+        )['aiSummary'];
+        $this->assertSame('failed', $failed['state']);
+        $this->assertSame('RouterAI отклонил ключ API (401).', $failed['message']);
+        $this->assertSame([], $failed['steps']);
+        $this->assertNull($failed['verdict']);
+
+        $noSteps = buildReport(
+            $this->diagnostic('done', [$this->step('ai_problem', 'done'), $this->step('ai_visual', 'done'),
+                $this->step('ai_summary', 'done') + ['started_at' => '2026-11-16 12:00:00']]),
+            [],
+            [],
+            [],
+            [],
+            [$this->summaryResult(12, '2026-11-16 12:01:00', ['verdict' => 'Вывод', 'severity' => 'low',
+                'steps' => [], 'rejected' => 3])]
+        )['aiSummary'];
+        $this->assertSame([], $noSteps['steps']);
+        $this->assertSame(3, $noSteps['rejected']);
+        $this->assertNull($noSteps['without']);
+    }
+
+    public function testAiSpendingSumsAllResultsOfAllTasksAndRuns(): void
+    {
+        $aiResults = [
+            $this->aiResult(1, 'ok', []),                                                  // 1200 / 300 → 34 коп.
+            $this->visualResult(2, 'ok', '2026-11-16 12:01:00', []),                       // 1000 / 100 → 21 коп.
+            array_replace($this->summaryResult(3, '2026-11-16 12:02:00', null), ['status' => 'error',
+                'tokens_in' => null, 'tokens_out' => null]),                                // ошибка без токенов → 0
+            $this->summaryResult(4, '2026-11-16 13:00:00', []),                            // перезапуск: 2000 / 500
+        ];
+
+        $spending = buildReport($this->diagnostic(), [], [], [], [], $aiResults, $this->catalog())['aiSpending'];
+
+        // 2000 × 160 ₽ + 500 × 481 ₽ за 1 млн = 0,5605 ₽ → 56 коп.; итого 34 + 21 + 0 + 56 = 111 коп.
+        $this->assertSame(
+            ['cost' => '≈ 1,11 ₽', 'unpriced' => 0, 'requests' => 4, 'tokensIn' => '4200', 'tokensOut' => '900'],
+            $spending
+        );
+
+        $partial = buildReport($this->diagnostic(), [], [], [], [], [
+            $this->aiResult(1, 'ok', []),
+            array_replace($this->aiResult(2, 'ok', []), ['model' => 'unknown/model']),
+        ], $this->catalog())['aiSpending'];
+        $this->assertSame('≈ 0,34 ₽', $partial['cost']);
+        $this->assertSame(1, $partial['unpriced']);
+
+        $noCatalog = buildReport($this->diagnostic(), [], [], [], [], $aiResults)['aiSpending'];
+        $this->assertNull($noCatalog['cost']);
+        $this->assertSame(4, $noCatalog['unpriced']);
+
+        $this->assertNull(buildReport($this->diagnostic(), [], [], [])['aiSpending'], 'Нет ответов ИИ — нет блока');
+    }
+
+    /**
+     * Цена `qwen/qwen4-max`: 160 ₽ / 481 ₽ за 1 млн токенов (в копейках).
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function catalog(): array
+    {
+        return ['qwen/qwen4-max' => ['id' => 'qwen/qwen4-max', 'name' => 'Qwen: Qwen4 Max', 'images' => true,
+            'json_schema' => true, 'price_in_kopecks' => 16000, 'price_out_kopecks' => 48100]];
+    }
+
+    /**
+     * @param array<string, mixed>|null $parsed
+     * @return array<string, mixed>
+     */
+    private function summaryResult(int $id, string $createdAt, ?array $parsed): array
+    {
+        return ['id' => $id, 'task' => 'summary', 'model' => 'qwen/qwen4-max', 'status' => 'ok',
+            'parsed_json' => $parsed, 'error_message' => null, 'tokens_in' => 2000, 'tokens_out' => 500,
+            'created_at' => $createdAt];
     }
 
     /**

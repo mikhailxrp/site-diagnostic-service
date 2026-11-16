@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 /**
  * Состояние и подпись ИИ-блока отчёта (внутри `card`, после содержимого). Ожидает: $aiBlock — `state`
- * (done / skipped / failed), `message` (причина для skipped / failed), `meta` (модель, дата, токены или null).
+ * (done / skipped / failed), `message` (причина для skipped / failed), `meta` (модель, дата, токены, стоимость
+ * `cost` — null, если цена неизвестна; или meta null).
  */
 ?>
 <?php if ($aiBlock['state'] === 'skipped') : ?>
@@ -25,5 +26,6 @@ declare(strict_types=1);
     <div class="card-footer small text-secondary">
         Модель: <?= e($aiBlock['meta']['model']) ?><?php if ($aiBlock['meta']['date'] !== null) : ?> · <?= e($aiBlock['meta']['date']) ?><?php endif; ?>
         · токены <?= e($aiBlock['meta']['tokensIn']) ?> / <?= e($aiBlock['meta']['tokensOut']) ?>
+        · <?= e($aiBlock['meta']['cost'] ?? 'стоимость неизвестна') ?>
     </div>
 <?php endif; ?>

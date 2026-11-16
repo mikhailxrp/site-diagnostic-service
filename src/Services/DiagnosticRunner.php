@@ -33,6 +33,7 @@ require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 require_once ROOT_PATH . '/src/Services/AiClient.php';
 require_once ROOT_PATH . '/src/Services/Ai/ProblemAnalysis.php';
 require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
+require_once ROOT_PATH . '/src/Services/Ai/SummaryAnalysis.php';
 require_once ROOT_PATH . '/src/Services/AiModels.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
@@ -67,6 +68,7 @@ function getDiagnosticSteps(): array
         ['code' => 'pagespeed',    'title' => 'Скорость (PageSpeed)',    'handler' => 'runPageSpeedStep'],
         ['code' => 'ai_problem',   'title' => 'Разбор проблемы (ИИ)',    'handler' => 'runAiProblemStep'],
         ['code' => 'ai_visual',    'title' => 'Проверка вёрстки (ИИ)',   'handler' => 'runAiVisualStep'],
+        ['code' => 'ai_summary',   'title' => 'Итоговый вывод (ИИ)',     'handler' => 'runAiSummaryStep'],
     ];
 }
 
@@ -478,6 +480,50 @@ function runAiVisualStep(array $context): array
         'message'  => $analysis['message'],
         'facts'    => ['ai_result_ids' => $analysis['ai_result_ids']],
         'findings' => $analysis['findings'],
+    ];
+}
+
+/**
+ * Шаг `ai_summary` с настоящей сетью и БД: факты, ИИ-находки шагов `ai_problem` / `ai_visual` и статусы шагов
+ * **из БД** → RouterAI → итог в `ai_results.parsed_json` (находок шаг не создаёт). Нет ключа → `skipped`; ошибка
+ * API или ответ не по схеме → исключение (`failed`), ответ уже записан в `ai_results`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runAiSummaryStep(array $context): array
+{
+    $key = env('ROUTERAI_API_KEY', '');
+    $keyError = validateAiKey($key);
+    if ($keyError !== null) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => $keyError];
+    }
+
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    $summary = is_string($diagnostic['summary_json'] ?? null) ? json_decode($diagnostic['summary_json'], true) : null;
+
+    $analysis = runSummaryAnalysis(
+        $context['diagnostic'],
+        [
+            'findings' => getFindingsByDiagnostic($diagnosticId),
+            'stack'    => getStackItemsByDiagnostic($diagnosticId),
+            'pages'    => getCheckedPagesByDiagnostic($diagnosticId),
+            'summary'  => is_array($summary) ? $summary : null,
+            'steps'    => $diagnostic['steps'] ?? [],
+        ],
+        resolveModelSetting(getSetting(AI_SUMMARY_MODEL_SETTING)),
+        $key,
+        loadSummaryPrompt(),
+        makeAiSender($key),
+        static fn (array $record): int => insertAiResult($diagnosticId, $record)
+    );
+    touchDiagnosticHeartbeat($diagnosticId);
+
+    return [
+        'status'  => STEP_STATUS_DONE,
+        'message' => $analysis['message'],
+        'facts'   => ['ai_result_id' => $analysis['ai_result_id']],
     ];
 }
 

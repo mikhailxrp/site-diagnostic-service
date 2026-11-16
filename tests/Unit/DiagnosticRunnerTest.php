@@ -269,7 +269,7 @@ final class DiagnosticRunnerTest extends TestCase
     {
         $this->assertSame(
             ['availability', 'stack', 'outdated', 'vulnerabilities', 'crawl', 'resources', 'seo', 'browser', 'pagespeed',
-                'ai_problem', 'ai_visual'],
+                'ai_problem', 'ai_visual', 'ai_summary'],
             array_column(getDiagnosticSteps(), 'code')
         );
     }

@@ -22,6 +22,7 @@ const AI_MODELS_HTTP_OK         = 200;
 
 const AI_PRICE_TOKENS_UNIT     = 1_000_000; // цена показывается за 1 млн токенов
 const AI_KOPECKS_PER_RUBLE     = 100;
+const AI_COST_LESS_THAN_KOPECK = '< 0,01 ₽';
 const AI_MODALITY_IMAGE        = 'image';
 const AI_PARAM_RESPONSE_FORMAT = 'response_format';
 
@@ -203,4 +204,37 @@ function formatAiPrice(int $kopecks): string
     $rest = $kopecks % AI_KOPECKS_PER_RUBLE;
 
     return $rest === 0 ? $rubles : $rubles . ',' . rtrim(sprintf('%02d', $rest), '0');
+}
+
+/**
+ * Стоимость ответа в целых копейках по цене модели из каталога (копейки за 1 млн токенов), с округлением до
+ * копейки — без float. Токенов нет (ошибка до ответа) — 0: платить не за что. Модели нет в каталоге или у неё нет
+ * цены → null.
+ *
+ * @param array{price_in_kopecks: ?int, price_out_kopecks: ?int}|null $model модель из loadAiModels()['models']
+ */
+function calculateAiCostKopecks(?int $tokensIn, ?int $tokensOut, ?array $model): ?int
+{
+    $priceIn = $model['price_in_kopecks'] ?? null;
+    $priceOut = $model['price_out_kopecks'] ?? null;
+    if ($priceIn === null || $priceOut === null) {
+        return null;
+    }
+
+    $scaled = ($tokensIn ?? 0) * $priceIn + ($tokensOut ?? 0) * $priceOut;
+
+    return intdiv($scaled + intdiv(AI_PRICE_TOKENS_UNIT, 2), AI_PRICE_TOKENS_UNIT);
+}
+
+/**
+ * Копейки → «4,20 ₽», «1 230,05 ₽»; меньше копейки (0, но токены были) → «< 0,01 ₽».
+ */
+function formatAiCost(int $kopecks, bool $hasTokens = true): string
+{
+    if ($kopecks === 0 && $hasTokens) {
+        return AI_COST_LESS_THAN_KOPECK;
+    }
+
+    return number_format(intdiv($kopecks, AI_KOPECKS_PER_RUBLE), 0, ',', ' ') . ','
+        . sprintf('%02d', $kopecks % AI_KOPECKS_PER_RUBLE) . ' ₽';
 }
