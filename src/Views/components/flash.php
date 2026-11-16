@@ -3,11 +3,12 @@
 declare(strict_types=1);
 
 /**
- * Флеш-сообщения (успех / ошибка). Каждое выводится один раз: getFlash() удаляет его из сессии.
+ * Флеш-сообщения (успех / предупреждение / ошибка). Каждое выводится один раз: getFlash() удаляет его из сессии.
  */
 
 $flashMessages = array_filter([
     'success' => getFlash('success'),
+    'warning' => getFlash('warning'),
     'danger'  => getFlash('error'),
 ]);
 ?>

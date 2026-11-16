@@ -9,6 +9,8 @@ use Throwable;
 require_once ROOT_PATH . '/src/Models/SettingsModel.php';
 require_once ROOT_PATH . '/src/Services/SettingsService.php';
 require_once ROOT_PATH . '/src/Services/BrowserService.php';
+require_once ROOT_PATH . '/src/Services/AiClient.php';
+require_once ROOT_PATH . '/src/Services/AiModels.php';
 
 /**
  * Настройки: модели RouterAI и путь к Chrome (в БД), ключи API из .env (только просмотр).
@@ -19,8 +21,13 @@ final class SettingsController
     private const FORM_STATE_KEY = 'settings_form';
     private const BROWSER_FORM_STATE_KEY = 'settings_browser_form';
 
-    /** Кнопка «Проверить Chrome»: `name="action" value="check"` */
+    /** Кнопки «Проверить Chrome» и «Проверить подключение»: `name="action" value="check"` */
     private const ACTION_CHECK = 'check';
+
+    /** Запас времени PHP сверх тайм-аутов тестовых запросов к RouterAI */
+    private const AI_CHECK_EXTRA_SECONDS = 30;
+
+    private const MODELS_UNCHECKED_MESSAGE = 'Не удалось проверить модели по списку RouterAI: %s';
 
     public function index(): void
     {
@@ -36,9 +43,13 @@ final class SettingsController
             $saved = [];
         }
 
+        $catalog = loadRouterAiModels()['models'] ?? [];
         $values = [];
+        $modelInfo = [];
         foreach (array_keys(SETTINGS_MODEL_FIELDS) as $key) {
-            $values[$key] = $formState['values'][$key] ?? $saved[$key] ?? '';
+            $values[$key] = $formState['values'][$key] ?? resolveModelSetting($saved[$key] ?? null);
+            $model = $catalog[$values[$key]] ?? null;
+            $modelInfo[$key] = $model !== null ? describeAiModel($model) : null;
         }
 
         render('pages/settings', [
@@ -46,6 +57,8 @@ final class SettingsController
             'activeMenu'    => 'settings',
             'modelFields'   => SETTINGS_MODEL_FIELDS,
             'values'        => $values,
+            'modelInfo'     => $modelInfo,
+            'defaultModel'  => AI_DEFAULT_MODEL,
             'errors'        => $formState['errors'] ?? [],
             'isEmpty'       => array_intersect_key($saved, SETTINGS_MODEL_FIELDS) === [],
             'envKeys'       => getEnvKeysOverview(),
@@ -89,11 +102,23 @@ final class SettingsController
         redirect('/settings');
     }
 
+    /**
+     * Сохраняет модели (проверив их по списку RouterAI); «Проверить подключение» после сохранения отправляет
+     * тестовый запрос каждой выбранной модели.
+     */
     public function save(): void
     {
         requireCsrf();
 
         ['values' => $values, 'errors' => $errors] = validateSettingsInput($_POST);
+
+        $catalog = ['models' => null, 'error' => null];
+        if ($errors === []) {
+            $catalog = loadRouterAiModels();
+            if ($catalog['models'] !== null) {
+                $errors = validateModelsAgainstCatalog($values, $catalog['models']);
+            }
+        }
 
         if ($errors !== []) {
             $_SESSION[self::FORM_STATE_KEY] = ['values' => $values, 'errors' => $errors];
@@ -103,13 +128,58 @@ final class SettingsController
 
         try {
             saveSettings($values);
-            setFlash('success', 'Настройки сохранены.');
         } catch (Throwable $e) {
             logException($e);
             $_SESSION[self::FORM_STATE_KEY] = ['values' => $values, 'errors' => []];
             setFlash('error', 'Не удалось сохранить настройки. Подробности в журнале.');
+            redirect('/settings');
+        }
+
+        setFlash('success', 'Настройки сохранены.');
+        if ($catalog['models'] === null) {
+            setFlash('warning', sprintf(self::MODELS_UNCHECKED_MESSAGE, $catalog['error']));
+        }
+        if (input('action') === self::ACTION_CHECK) {
+            $this->checkConnection(array_values(array_unique($values)));
         }
 
         redirect('/settings');
+    }
+
+    /**
+     * Тестовый запрос каждой модели; итог — во flash (успех: модели, время, токены; ошибка: текст RouterAI).
+     *
+     * @param list<string> $models
+     */
+    private function checkConnection(array $models): void
+    {
+        set_time_limit(count($models) * AI_CHECK_TIMEOUT_SECONDS * AI_MAX_ATTEMPTS + self::AI_CHECK_EXTRA_SECONDS);
+
+        $key = env('ROUTERAI_API_KEY', '');
+        $keyError = validateAiKey($key);
+        if ($keyError !== null) {
+            setFlash('error', $keyError);
+
+            return;
+        }
+
+        $passed = [];
+        $failed = [];
+        foreach ($models as $model) {
+            $check = checkAiConnection(ROUTERAI_BASE_URL, $model, $key, makeRouterAiTransport(), makeAiSleeper());
+            if ($check['ok']) {
+                $passed[] = $check['message'];
+            } else {
+                $failed[] = $check['message'];
+                logWarning('Проверка подключения RouterAI не прошла', ['reason' => $check['message']]);
+            }
+        }
+
+        if ($passed !== []) {
+            setFlash('success', 'Подключение работает: ' . implode('; ', $passed) . '.');
+        }
+        if ($failed !== []) {
+            setFlash('error', 'Проверка подключения не прошла. ' . implode(' ', $failed));
+        }
     }
 }

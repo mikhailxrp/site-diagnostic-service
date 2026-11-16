@@ -164,7 +164,7 @@
 - Проверяются открытые служебные файлы.
 
 ## Открытые вопросы
-- Адрес API RouterAI (base URL) — решено: `https://routerai.ru/api/v1`. Открыто: какие модели там умеют работать с картинками: нужно для проверки вёрстки по скриншотам. Какие модели выбрать по умолчанию для каждой задачи?
+- ~~Адрес API RouterAI (base URL), модели с картинками, модели по умолчанию.~~ Решено 16.11.2026: base URL — `https://routerai.ru/api/v1`; понимает ли модель картинки, видно в `GET /models` RouterAI (`architecture.input_modalities`, отвечает без ключа); по умолчанию для всех ИИ-задач — `qwen/qwen4-max` с `reasoning_effort = low`.
 - Ключ Google PageSpeed Insights: есть или нужно получить?
 - Откуда брать данные об уязвимостях по версиям (WPScan, NVD/CVE, свои списки)? Для 1С-Битрикс и OpenCart открытых баз почти нет.
 - Какие CMS и платформы распознавать в первую очередь? [допущение: WordPress/WooCommerce, 1С-Битрикс, OpenCart, Joomla, PrestaShop, Magento, Shop-Script, а также SaaS: InSales, Tilda]

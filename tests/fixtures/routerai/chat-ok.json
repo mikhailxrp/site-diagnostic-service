@@ -1,0 +1,32 @@
+{
+    "id": "rai-1794832714-5CDQ9T4OdBI8lWtCDvU7",
+    "object": "chat.completion",
+    "created": 1794832714,
+    "model": "qwen4-max",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"ok\": true}",
+                "reasoning": ""
+            },
+            "finish_reason": "stop",
+            "logprobs": null
+        }
+    ],
+    "usage": {
+        "total_tokens": 107,
+        "prompt_tokens": 100,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 100
+        },
+        "completion_tokens": 7,
+        "completion_tokens_details": {
+            "reasoning_tokens": 0
+        },
+        "cost": 0.01938367002
+    },
+    "provider": "Alibaba"
+}

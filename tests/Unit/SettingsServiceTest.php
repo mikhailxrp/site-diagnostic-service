@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 require_once ROOT_PATH . '/src/Services/SettingsService.php';
+require_once ROOT_PATH . '/src/Services/AiModels.php';
 
 final class SettingsServiceTest extends TestCase
 {
@@ -141,5 +142,50 @@ final class SettingsServiceTest extends TestCase
 
         $this->assertSame('sk-…a1b2', $masked);
         $this->assertStringNotContainsString('verysecret', $masked);
+    }
+
+    public function testResolveModelSettingFallsBackToDefault(): void
+    {
+        $this->assertSame(AI_DEFAULT_MODEL, resolveModelSetting(null));
+        $this->assertSame(AI_DEFAULT_MODEL, resolveModelSetting('  '));
+        $this->assertSame('openai/gpt-5-mini', resolveModelSetting(' openai/gpt-5-mini '));
+    }
+
+    private static function catalog(): array
+    {
+        return parseAiModelsList((string) file_get_contents(ROOT_PATH . '/tests/fixtures/routerai/models.json'));
+    }
+
+    private static function models(string $problem, string $visual, string $summary): array
+    {
+        return ['model_problem' => $problem, 'model_visual' => $visual, 'model_summary' => $summary];
+    }
+
+    public function testDefaultModelPassesCatalogCheckForAllTasks(): void
+    {
+        $values = self::models(AI_DEFAULT_MODEL, AI_DEFAULT_MODEL, AI_DEFAULT_MODEL);
+
+        $this->assertSame([], validateModelsAgainstCatalog($values, self::catalog()));
+    }
+
+    public function testCatalogCheckRejectsUnknownModel(): void
+    {
+        $values = self::models('no-such/model-x', AI_DEFAULT_MODEL, AI_DEFAULT_MODEL);
+
+        $this->assertSame(['model_problem' => MODEL_ERROR_UNKNOWN], validateModelsAgainstCatalog($values, self::catalog()));
+    }
+
+    public function testTextOnlyModelIsRejectedOnlyForVisualTask(): void
+    {
+        $values = self::models('qwen/qwen3.7-max', 'qwen/qwen3.7-max', 'qwen/qwen3.7-max');
+
+        $this->assertSame(['model_visual' => MODEL_ERROR_NO_IMAGES], validateModelsAgainstCatalog($values, self::catalog()));
+    }
+
+    public function testModelWithoutJsonSchemaIsRejected(): void
+    {
+        $values = self::models(AI_DEFAULT_MODEL, AI_DEFAULT_MODEL, 'google/gemini-decision-1');
+
+        $this->assertSame(['model_summary' => MODEL_ERROR_NO_SCHEMA], validateModelsAgainstCatalog($values, self::catalog()));
     }
 }

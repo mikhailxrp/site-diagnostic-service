@@ -39,6 +39,16 @@ final class FlashComponentTest extends TestCase
         $this->assertStringContainsString('Ошибка', $html);
     }
 
+    public function testRendersWarningAlert(): void
+    {
+        $_SESSION['flash'] = ['warning' => 'Список моделей недоступен'];
+
+        $html = $this->renderFlash();
+
+        $this->assertStringContainsString('alert-warning', $html);
+        $this->assertStringContainsString('Список моделей недоступен', $html);
+    }
+
     public function testEscapesMessageHtml(): void
     {
         $_SESSION['flash'] = ['error' => '<script>alert(1)</script>'];

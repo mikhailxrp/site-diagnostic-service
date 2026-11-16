@@ -100,7 +100,7 @@ $tables = [
         SQL,
 
     // Фаза 1: находки от проверок и (с фазы 4) от ИИ.
-    // ai_result_id пока без FK: таблица ai_results появится в фазе 4, FK добавится там же (ALTER TABLE)
+    // FK ai_result_id → ai_results добавляется ниже, в $foreignKeys (фаза 4): ai_results создаётся после findings
     'findings' => <<<SQL
         CREATE TABLE IF NOT EXISTS findings (
             id            INT NOT NULL AUTO_INCREMENT,
@@ -162,6 +162,38 @@ $tables = [
                 REFERENCES checked_pages (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         SQL,
+
+    // Фаза 4: ответы ИИ по задачам; ключ API в request_json не пишется, картинки — только id скриншотов
+    'ai_results' => <<<SQL
+        CREATE TABLE IF NOT EXISTS ai_results (
+            id            INT NOT NULL AUTO_INCREMENT,
+            diagnostic_id INT NOT NULL,
+            task          ENUM('problem','visual','summary','client_text') NOT NULL,
+            model         VARCHAR(150) NOT NULL,
+            status        ENUM('ok','error') NOT NULL,
+            request_json  JSON NULL,
+            response_text MEDIUMTEXT NULL,
+            parsed_json   JSON NULL,
+            error_message VARCHAR(1000) NULL,
+            tokens_in     INT UNSIGNED NULL,
+            tokens_out    INT UNSIGNED NULL,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            CONSTRAINT fk_ai_results_diagnostic FOREIGN KEY (diagnostic_id)
+                REFERENCES diagnostics (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        SQL,
+];
+
+// ─── Внешние ключи к таблицам из более поздних фаз (ALTER TABLE, только если ключа ещё нет) ───
+
+$foreignKeys = [
+    // Фаза 4: какой ответ ИИ породил находку
+    'fk_findings_ai_result' => [
+        'table' => 'findings',
+        'sql'   => 'ALTER TABLE findings ADD CONSTRAINT fk_findings_ai_result FOREIGN KEY (ai_result_id)
+                    REFERENCES ai_results (id) ON DELETE SET NULL',
+    ],
 ];
 
 // ─── Установка ─────────────────────────────────────────────────────────────────
@@ -180,6 +212,21 @@ try {
 
         echo $alreadyExists ? "  = {$tableName}: уже есть\n" : "  + {$tableName}: создана\n";
     }
+
+    $foreignKeyExists = $pdo->prepare(
+        "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = 'FOREIGN KEY'"
+    );
+    foreach ($foreignKeys as $constraintName => $foreignKey) {
+        $foreignKeyExists->execute([$foreignKey['table'], $constraintName]);
+        if ((int) $foreignKeyExists->fetchColumn() > 0) {
+            echo "  = {$constraintName}: уже есть\n";
+            continue;
+        }
+
+        $pdo->exec($foreignKey['sql']);
+        echo "  + {$constraintName}: добавлен\n";
+    }
 } catch (Throwable $e) {
     logException($e, ['script' => 'database/install.php']);
     fwrite(
@@ -190,5 +237,5 @@ try {
     exit(EXIT_ERROR);
 }
 
-echo "Готово: таблиц — " . count($tables) . ".\n";
+echo "Готово: таблиц — " . count($tables) . ", внешних ключей — " . count($foreignKeys) . ".\n";
 exit(EXIT_OK);

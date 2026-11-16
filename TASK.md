@@ -1,134 +1,119 @@
 # Current Task
 
 ## Фаза
-Phase 3 — Проверка в браузере
+Phase 4 — ИИ-анализ
 
 ## Задача
-Шаг `pagespeed` после `browser`: главная проверяется через Google PageSpeed Insights (mobile + desktop), итог —
-в `summary_json.pagespeed`, находки `speed` по порогам Core Web Vitals, в отчёте — карточка «Скорость».
+Сервис отправляет запросы в OpenAI-совместимый API RouterAI и умеет сохранять ответы в `ai_results`; в настройках
+модели проверяются по списку RouterAI, по умолчанию — `qwen/qwen4-max`; кнопка «Проверить подключение» показывает
+ответ модели или ошибку API.
 
 ## Образец
 Образца нет: экран из компонентов Tabler (решение владельца, 15.11.2026). Своего CSS и JS нет.
-- **Где:** карточка «Скорость» в `diagnostic.php` сразу после «Сводки» (блок один — отдельный компонент не нужен).
-- **Оценка:** две плашки «Mobile» / «Desktop» с числом 0–100; цвет как у Google: ≥ 90 — `bg-success-lt`,
-  50–89 — `bg-warning-lt`, < 50 — `bg-danger-lt`.
-- **Лаборатория (Lighthouse):** `table table-vcenter` в `table-responsive`, колонки «Метрика / Mobile / Desktop»,
-  строки LCP, CLS, TBT, FCP; значение с плашкой «хорошо» / «требует улучшения» / «плохо».
-- **Реальные пользователи:** отдельная таблица той же формы с подписью «Реальные пользователи (Chrome UX Report,
-  28 дней)», строки LCP, INP, CLS, FCP; если данные взяты по всему сайту, а не по странице — отметка «по всему сайту».
-- **Предупреждения Lighthouse** (`runWarnings`, например «страница загружалась слишком медленно») — `alert
-  alert-warning` под оценками.
+- **Где:** карточка «Модели ИИ (RouterAI)» на `/settings`.
+- **Поля:** те же три; если модель не сохранена, в поле подставляется `qwen/qwen4-max`. Плашка «Модели ещё не
+  заданы» меняется на `alert alert-info` «Используются модели по умолчанию — сохраните, чтобы закрепить».
+- **Под каждым полем** (`form-hint`, к нынешней подсказке) — строка о модели из списка RouterAI: «Qwen: Qwen4 Max ·
+  картинки: да · 160 / 481 ₽ за 1 млн токенов». Модели нет в списке или список недоступен — строки нет.
+- **Кнопки в футере:** «Проверить подключение» (`btn btn-outline-primary btn-lg`, `name="action" value="check"` —
+  проверить поля, сохранить, отправить тестовый запрос) и «Сохранить».
 - **Состояния:**
-  - обе стратегии есть — карточка целиком;
-  - одна стратегия упала — в её колонке «—», `alert alert-warning` с причиной;
-  - нет данных реальных пользователей — «У Google нет данных реальных пользователей по этому сайту»;
-  - шаг `skipped` — карточки нет, причина в «Не удалось проверить» (блок уже есть);
-  - старая диагностика без `summary_json.pagespeed` — карточки нет.
+  - успех проверки — flash `success`: «Подключение работает: qwen/qwen4-max, 3,2 с, токены 25 / 8»;
+  - ошибка API — flash `error` с текстом ошибки (неверный ключ, 429, тайм-аут);
+  - нет ключа — «Ключ ROUTERAI_API_KEY не задан в .env»;
+  - модели нет в RouterAI / нет картинок / нет ответа по схеме JSON — ошибка под полем (`is-invalid`);
+  - список моделей недоступен — сохранение проходит, flash `warning` «Не удалось проверить модели по списку
+    RouterAI».
 
-## Контекст (проверено 16.11.2026 живыми запросами к API на sudar.su, example.com, несуществующий домен)
-- Ключ `PAGESPEED_API_KEY` в `.env` есть и работает; на странице настроек показывается маской — правок не нужно.
-- Категория `speed` уже есть в `FindingFactory.php` (`low`) и `ReportBuilder.php` («Скорость»).
-- **Время:** mobile — 67 с, desktop — 50 с (sudar.su), example.com — 9 с. Ответ ~1 МБ (предел
-  `HTTP_API_MAX_BODY_BYTES` 20 МБ хватает).
-- **Ключ в заголовке:** API принимает `X-Goog-Api-Key` (проверено: 200). В адресе ключа не будет вообще —
-  не попадёт ни в лог, ни в текст ошибки curl. `httpApiRequest()` сейчас не принимает своих заголовков.
-- **Ответ 200:** `lighthouseResult.categories.performance.score` (0–1, может быть `null`), `audits.<id>.numericValue`
-  (мс; CLS — без единиц), `lighthouseVersion` (13.6.0), `runWarnings` (уже на `locale=ru`), `analysisUTCTimestamp`;
-  `loadingExperience` (по адресу) и `originLoadingExperience` (по сайту): `metrics.<KEY>.percentile` + `category`
-  `FAST` / `AVERAGE` / `SLOW`. `CUMULATIVE_LAYOUT_SHIFT_SCORE` приходит ×100 (12 → 0,12). Данные пользователей
-  у mobile и desktop разные (свой form factor).
-- **Ошибки:** неверный ключ — 400, `error.message` «API key not valid…» (ключа в теле нет); страница не открылась —
-  тоже 400: «Lighthouse returned error: FAILED_DOCUMENT_REQUEST. Не удалось загрузить страницу… net::ERR_CONNECTION_FAILED»,
-  а не `runtimeError` в 200. Квота — 429.
-- Адрес главной — `facts.home.final_url` шага `availability`. Клиенты NVD / OSV получают транспорт через `callable` —
-  так же тестируется и PageSpeed без сети.
+## Контекст (проверено 16.11.2026)
+- В БД модели не сохранены (есть только пустой `chrome_path`) — нужны модели по умолчанию.
+- `httpApiRequest()` уже принимает JSON-тело и свои заголовки — ключ передаётся заголовком `Authorization`, как ключ
+  PageSpeed (`X-Goog-Api-Key`).
+- «Проверить Chrome» сделана второй кнопкой формы (`action=check`) — «Проверить подключение» так же, маршруты не
+  меняются (`POST /settings`).
+- `ai_results.diagnostic_id` — NOT NULL, поэтому проверка подключения в `ai_results` не пишется; настоящие записи
+  появятся в таске 2, здесь — функции записи и подготовка данных для неё.
+- `install.php` умеет только `CREATE TABLE IF NOT EXISTS`; FK `findings.ai_result_id` — через `ALTER TABLE` с
+  проверкой `information_schema` (повторный запуск не падает).
+- `GET https://routerai.ru/api/v1/models` отвечает без ключа: `architecture.input_modalities`,
+  `supported_parameters`, `pricing` (рубли за токен). `qwen/qwen4-max`: текст / картинки / видео, `response_format`
+  и `structured_outputs` есть, вход 0,00016019562 ₽, выход 0,00048058686 ₽ за токен.
 
 ## Решения
-- **Запрос:** `GET https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=…&strategy=mobile|desktop&category=performance&locale=ru`,
-  ключ — заголовком `X-Goog-Api-Key`. Сначала mobile, потом desktop (последовательно); heartbeat — после каждого.
-  `PAGESPEED_TIMEOUT_SECONDS = 120` (наблюдали 67 с — запас почти вдвое). Шаг занимает до ~2–4 минут, что в рамках
-  `HEARTBEAT_STALE_SECONDS` (10 мин). Повторов при ошибке нет.
-- **Когда шаг пропускается (`skipped`):** нет ключа — «Не задан PAGESPEED_API_KEY в .env»; главная не ответила
-  (`status` null) — «Главная не ответила»; обе стратегии с ошибкой — причины обеих. Защита от ботов шаг не
-  пропускает: страницу открывают серверы Google, а не этот ПК.
-- **Причины ошибок:** 429 — «Превышен лимит запросов PageSpeed»; 4xx/5xx — `error.message` из тела (обрезан
-  до разумной длины); тайм-аут / curl — текст `httpApiRequest()`; 200 с `lighthouseResult.runtimeError` —
-  его `code` + `message`; 200 без оценки и метрик — «Ответ PageSpeed без результатов». Одна стратегия упала —
-  шаг `done`, сообщение «mobile: 39; desktop: ошибка …».
-- **Ключ не утекает:** он только в заголовке; дополнительно все тексты ошибок проходят через `redactPageSpeedKey()`
-  (подстрока ключа → `[REDACTED]`) — на случай, если Google когда-нибудь вернёт его в теле.
-- **Разбор:**
-  - оценка — `round(score × 100)`, `null` → нет оценки;
-  - лаборатория — `largest-contentful-paint`, `cumulative-layout-shift`, `total-blocking-time`,
-    `first-contentful-paint` (`numericValue`);
-  - пользователи — `LARGEST_CONTENTFUL_PAINT_MS`, `INTERACTION_TO_NEXT_PAINT`, `CUMULATIVE_LAYOUT_SHIFT_SCORE` (÷ 100),
-    `FIRST_CONTENTFUL_PAINT_MS`; источник: `loadingExperience`, если есть `metrics` и нет `origin_fallback`
-    → `field_scope = url`; иначе `originLoadingExperience.metrics` → `origin`; иначе данных нет;
-  - сырой ответ не хранится.
-- **`summary_json.pagespeed`:** `{url, mobile: {score, lab, field, field_scope, warnings, lighthouse_version,
-  analyzed_at} | null, desktop: …, errors: {mobile?: reason, desktop?: reason}}`.
-- **Пороги** (`SpeedCheck.php`, как у Google, граница «хорошо» включительно): LCP ≤ 2500 / ≤ 4000 мс,
-  CLS ≤ 0,1 / ≤ 0,25, INP ≤ 200 / ≤ 500 мс, TBT ≤ 200 / ≤ 600 мс, FCP ≤ 1800 / ≤ 3000 мс. Один набор порогов
-  для лаборатории и пользователей; тест сверяет оценку по порогам с `category` из сохранённого ответа.
-- **Находки `speed`** (чистые функции), по стратегиям вместе — одна находка на показатель:
-  - LCP и CLS — по данным пользователей, если есть, иначе по лаборатории;
-  - отзывчивость — INP пользователей, если есть, иначе TBT лаборатории (TBT — лабораторная замена INP,
-    двух находок про одно не будет);
-  - оценка < 50 — отдельная находка;
-  - FCP — только в таблице, без находки;
-  - серьёзность по худшей стратегии: «плохо» и оценка < 50 → `medium`, «требует улучшения» → `low`;
-  - `evidence`: значения по стратегиям и источник («реальные пользователи» / «лаборатория»); `page_id` главной;
-    ключ `fingerprint` — `speed:<показатель>`.
-- **Порядок шагов:** `… seo, browser, pagespeed`, название — «Скорость (PageSpeed)».
+- **Модели по умолчанию:** константа `AI_DEFAULT_MODEL = 'qwen/qwen4-max'` для всех трёх задач;
+  `resolveModelSetting()` — сохранённая модель или модель по умолчанию (через неё модель берут ИИ-шаги тасков 2–4).
+- **Список моделей:** `GET {ROUTERAI_BASE_URL}/models` без ключа, кэш на сутки в `storage/cache/routerai/models.json`;
+  RouterAI не ответил — старый кэш любой давности; кэша нет — модели не проверяются, сохранение с предупреждением.
+- **Проверка моделей при сохранении:**
+  - модель есть в списке;
+  - в `supported_parameters` есть `response_format` (ответ по схеме JSON нужен всем трём задачам);
+  - для `model_visual` в `input_modalities` есть `image`.
+- **Запрос:** `POST {ROUTERAI_BASE_URL}/chat/completions` — `model`, `messages`, `max_tokens` (константа),
+  `response_format: {type: json_schema, json_schema: {name, strict: true, schema}}`, `reasoning_effort: low`.
+  Какое поле RouterAI понимает на самом деле (`reasoning_effort` или `reasoning.effort`) — проверить живым запросом.
+- **Картинки:** `image_url` с `data:image/jpeg;base64,…`; в запись для `ai_results.request_json` картинка не
+  попадает — вместо неё `{"screenshot_id": N}` или `"[image]"`.
+- **Тайм-аут:** `AI_TIMEOUT_SECONDS = 180`, для проверки подключения — 60 с; не уложился — «RouterAI не ответил
+  вовремя».
+- **Повторы:** при 429 / 5xx / сетевой ошибке, до 3 попыток всего, паузы — константы (пауза передаётся параметром,
+  тесты не ждут); при 400 / 401 / 402 / 403 повтора нет.
+- **Разбор ответа:** `choices[0].message.content`, `model` (какая модель ответила на самом деле),
+  `usage.prompt_tokens` / `usage.completion_tokens`, `finish_reason`; ошибка — из `error.message`; пустой ответ или
+  обрыв по `length` — ошибка с понятным текстом.
+- **Ключ:** только заголовком `Authorization: Bearer`; проверка допустимых символов; тексты ошибок проходят через
+  `redact…()` (по образцу `PageSpeedService.php`). Ключа нет в `ai_results`, `app.log`, flash, сообщениях.
+- **Тестовый запрос «Проверить подключение»:** модель просят ответить JSON `{"ok": true}` по схеме (проверяется и
+  ответ по схеме). Одна модель в трёх полях — один запрос, разные — по запросу на каждую. `set_time_limit` с запасом.
+- **Сеть в тестах:** транспорт — `callable` (как в `NvdClient` / `PageSpeedService`), тесты в сеть не ходят.
 
 ## Scope — что трогаем
-- [ ] `src/Services/HttpClient.php` — изменить: `httpApiRequest()` — необязательный последний параметр
-      `array $extraHeaders = []` (существующие вызовы не меняются)
-- [ ] `src/Services/PageSpeedService.php` — создать (адрес запроса, заголовок с ключом, запрос через переданный
-      транспорт, разбор ответа, причины ошибок, `redactPageSpeedKey()`, константы адреса и тайм-аута)
-- [ ] `src/Services/Checks/SpeedCheck.php` — создать (пороги, оценка показателя, выбор источника, находки `speed`,
-      сообщение шага)
-- [ ] `src/Services/DiagnosticRunner.php` — изменить (шаг `pagespeed` в `getDiagnosticSteps()`, `runPageSpeedStep()`:
-      ключ из `env()`, heartbeat после каждой стратегии, `updateDiagnosticSummary(['pagespeed' => …])`)
-- [ ] `src/Services/ReportBuilder.php` — изменить (`buildReportPageSpeed()`: оценки с плашками, строки метрик,
-      данные пользователей, предупреждения, ошибки стратегий; ключ `pagespeed` в `buildReport()`)
-- [ ] `src/Views/pages/diagnostic.php` — изменить (карточка «Скорость»)
-- [ ] `tests/fixtures/pagespeed/` — создать: настоящие ответы sudar.su mobile / desktop, урезанные скриптом до
-      нужных полей; ошибки 400 (неверный ключ, `FAILED_DOCUMENT_REQUEST`); собранные вручную варианты (только
-      данные сайта, без данных пользователей, `runtimeError`, `score: null`, 429) — помечены в имени файла
-- [ ] `tests/Unit/PageSpeedServiceTest.php` — создать (адрес и кодирование `url`, ключ только в заголовке, разбор
-      фикстур, `field_scope` url / origin / нет, CLS ÷ 100, `runtimeError`, `score: null`, 400 / 429 / тайм-аут →
-      причина, `redactPageSpeedKey()`)
-- [ ] `tests/Unit/SpeedCheckTest.php` — создать (границы порогов включительно, совпадение с `category` Google,
-      приоритет пользователей, INP вместо TBT, оценка < 50, склейка стратегий, худшая серьёзность, всё хорошо →
-      нет находок, одна стратегия упала, обе упали → `skipped`)
-- [ ] `tests/Unit/ReportBuilderTest.php` — изменить (карточка «Скорость» и её состояния, нет `pagespeed` → null)
-- [ ] `tests/Unit/DiagnosticRunnerTest.php` — изменить (порядок шагов с `pagespeed`)
+- [x] `database/install.php` — изменить: таблица `ai_results` (по `.docs/database.md`); FK `fk_findings_ai_result`
+      (`findings.ai_result_id → ai_results.id ON DELETE SET NULL`) через `ALTER TABLE`, если его нет в
+      `information_schema`
+- [x] `.docs/database.md` — изменить: пометка у `findings.ai_result_id`, что FK добавлен в фазе 4
+- [x] `src/Services/AiClient.php` — создать: сборка запроса, кусок сообщения с картинкой, отправка с повторами,
+      разбор ответа, описание ошибок, вырезание ключа, подготовка записи для `ai_results` без ключа и картинок
+- [x] `src/Services/AiModels.php` — создать: загрузка и кэш списка моделей, поиск модели, «понимает картинки»,
+      «отвечает по схеме JSON», цена за 1 млн токенов в рублях, строка о модели для подсказки
+- [x] `src/Models/AiResultModel.php` — создать: `insertAiResult()`, `getAiResultsByDiagnostic()`
+- [x] `src/Services/SettingsService.php` — изменить: `AI_DEFAULT_MODEL`, `resolveModelSetting()`, проверка моделей
+      по списку RouterAI
+- [x] `src/Controllers/SettingsController.php` — изменить: модели по умолчанию в форме, проверка по списку,
+      `action=check` → сохранить и проверить подключение → redirect + flash
+- [x] `src/Views/pages/settings.php` — изменить: строка о модели под полем, кнопка «Проверить подключение», текст
+      плашки про модели по умолчанию
+- [x] `tests/Unit/AiClientTest.php`, `tests/Unit/AiModelsTest.php` — создать; `tests/Unit/SettingsServiceTest.php` —
+      изменить
+- [x] `tests/fixtures/routerai/` — создать: урезанный настоящий `models.json` (`qwen/qwen4-max`; модель без картинок
+      `qwen/qwen3.7-max`; модель без `response_format`), успешный ответ `chat/completions`, ошибки 401 и 429
 
 ## Out of scope — не трогаем
-- PageSpeed для страниц, кроме главной; параллельный запуск mobile / desktop (`curl_multi`); повторы запросов
-- Сырой ответ Lighthouse, раздел «Возможности оптимизации», скриншоты Lighthouse
-- Страница настроек, `SettingsService.php`, `.env.example`
-- Схема БД и `.docs/database.md` (используется `summary_json`)
-- `BrowserService.php`, скриншоты, ошибки JS
-- ИИ-анализ (Фаза 4), клиентский отчёт и PDF (Фаза 5)
-- Попутный рефакторинг
+- ИИ-шаги `ai_problem` / `ai_visual` / `ai_summary`, их пропуск без ключа, `DiagnosticRunner.php` — таски 2–4
+- `FactPacker`, промпты `config/prompts/`, проверка ссылок на факты — таск 2
+- Обрезка скриншотов через GD — таск 3
+- ИИ-блоки и стоимость в отчёте — таск 4
+- Перезапуск ИИ-анализа — таск 5
+- Выпадающий список / поиск моделей в настройках (поле остаётся текстовым)
+- Запись проверки подключения в `ai_results` (нет диагностики, `diagnostic_id` NOT NULL)
+- Рефакторинг `httpApiRequest()` и `PageSpeedService.php`
 
 ## Definition of Done
-- [ ] Живая диагностика sudar.su и cleansan.ru: в отчёте оценки mobile / desktop, лабораторные метрики и отдельно
-      подписанные данные реальных пользователей (или сообщение, что их нет); предупреждения Lighthouse видны
-- [ ] Цвета плашек оценки и метрик соответствуют порогам (тест + визуально)
-- [ ] Плохие показатели дают находки `speed` со стратегиями и источником; один показатель — одна находка (тест)
-- [ ] Пустой `PAGESPEED_API_KEY` → шаг `skipped` с причиной, отчёт строится, причина в «Не удалось проверить»
-- [ ] Неверный ключ (400) и 429 → `skipped` с понятной причиной (тест + вживую с испорченным ключом)
-- [ ] Ключа нет в `storage/logs/app.log`, `diagnostic_steps.message`, `summary_json` (поиск строки ключа после
-      прогона с ошибкой)
-- [ ] Упала одна стратегия → шаг `done`, в карточке «—» и предупреждение (тест)
-- [ ] citilink.ru: шаг `done` или `skipped` с причиной, воркер не падает, диагностика не помечается прерванной
-- [ ] Отчёт на 360 / 768 / 1280 px: таблицы не ломают вёрстку, консоль чистая
-- [ ] Экран соответствует описанию из «Образец» по расположению и составу, состояния реализованы
-- [ ] `composer test` проходит (PHP 8.3 OpenServer), в `storage/logs/app.log` нет новых ошибок
-- [ ] Проверить `.docs/dod-global.md`
+- [x] `php database/install.php`: таблица `ai_results` создана, FK `fk_findings_ai_result` есть; повторный запуск —
+      без ошибок, данные не тронуты
+- [x] В пустой БД на `/settings` в трёх полях `qwen/qwen4-max`, под каждым — строка о модели (картинки, цена)
+- [x] «Проверить подключение» с настоящим ключом — успех с моделью, временем и токенами; с испорченным ключом
+      (временная правка `.env`) — текст ошибки RouterAI; без ключа — «Ключ ROUTERAI_API_KEY не задан в .env»
+- [x] Несуществующая модель не сохраняется (ошибка под полем); `qwen/qwen3.7-max` не сохраняется в «Проверка
+      вёрстки», но сохраняется в «Разбор проблемы»
+- [x] Список моделей недоступен (подменён адрес, кэша нет) — сохранение проходит с предупреждением, страница
+      открывается
+- [x] Повтор при 429 / 5xx, без повтора при 401; после 3 попыток — ошибка (тест)
+- [x] Ключа нет в записи для `ai_results`, текстах ошибок, `app.log`, flash (тест + поиск по `app.log`); картинки в
+      записи заменены ссылкой (тест)
+- [x] Настройки проверены на 360 / 768 / 1280 px, кнопки не меньше 44 px, консоль чистая
+- [x] Экран собран из компонентов Tabler по разделу «Образец», состояния реализованы
+- [x] `composer test` проходит (PHP 8.3 OpenServer)
+- [x] Проверить `.docs/dod-global.md`
 
 ## Важные правила
 - Следовать `CLAUDE.md`

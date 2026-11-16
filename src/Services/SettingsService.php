@@ -14,21 +14,31 @@ const SECRET_VISIBLE_SUFFIX = 4;
 const SECRET_SHORT_LENGTH   = 8; // ключ такой длины и короче скрывается целиком
 const SECRET_FULL_MASK      = '••••••••';
 
-/** Редактируемые настройки: ключ → подпись и подсказка */
+/** Модель по умолчанию для всех ИИ-задач (решение владельца, 16.11.2026): картинки, JSON по схеме */
+const AI_DEFAULT_MODEL = 'qwen/qwen4-max';
+
+/** Редактируемые настройки: ключ → подпись, подсказка и нужны ли модели картинки */
 const SETTINGS_MODEL_FIELDS = [
     'model_problem' => [
-        'label' => 'Разбор проблемы',
-        'hint'  => 'Гипотезы по описанию проблемы клиента.',
+        'label'        => 'Разбор проблемы',
+        'hint'         => 'Гипотезы по описанию проблемы клиента.',
+        'needs_images' => false,
     ],
     'model_visual' => [
-        'label' => 'Проверка вёрстки',
-        'hint'  => 'Анализ скриншотов — модель должна понимать картинки.',
+        'label'        => 'Проверка вёрстки',
+        'hint'         => 'Анализ скриншотов — модель должна понимать картинки.',
+        'needs_images' => true,
     ],
     'model_summary' => [
-        'label' => 'Итоговый вывод',
-        'hint'  => 'Сводка по всем находкам диагностики.',
+        'label'        => 'Итоговый вывод',
+        'hint'         => 'Сводка по всем находкам диагностики.',
+        'needs_images' => false,
     ],
 ];
+
+const MODEL_ERROR_UNKNOWN   = 'Такой модели нет в RouterAI.';
+const MODEL_ERROR_NO_SCHEMA = 'Модель не умеет отвечать по схеме JSON.';
+const MODEL_ERROR_NO_IMAGES = 'Модель не понимает картинки, а здесь нужны скриншоты.';
 
 /** Путь к Chrome: настройка `chrome_path`, пустая — путь по умолчанию */
 const CHROME_PATH_SETTING    = 'chrome_path';
@@ -83,6 +93,43 @@ function validateSettingsInput(array $input): array
     }
 
     return ['values' => $values, 'errors' => $errors];
+}
+
+/**
+ * Модель для ИИ-задачи: сохранённая или AI_DEFAULT_MODEL.
+ */
+function resolveModelSetting(?string $saved): string
+{
+    $saved = trim((string) $saved);
+
+    return $saved !== '' ? $saved : AI_DEFAULT_MODEL;
+}
+
+/**
+ * Проверка моделей по списку RouterAI (`parseAiModelsList()`): есть ли модель, отвечает ли по схеме JSON,
+ * понимает ли картинки там, где они нужны.
+ *
+ * @param array<string, string> $values ключ настройки → модель
+ * @param array<string, array{images: bool, json_schema: bool}> $models
+ * @return array<string, string> ключ настройки → текст ошибки
+ */
+function validateModelsAgainstCatalog(array $values, array $models): array
+{
+    $errors = [];
+    foreach (SETTINGS_MODEL_FIELDS as $key => $field) {
+        $model = $models[$values[$key] ?? ''] ?? null;
+        $error = match (true) {
+            $model === null                               => MODEL_ERROR_UNKNOWN,
+            !$model['json_schema']                        => MODEL_ERROR_NO_SCHEMA,
+            $field['needs_images'] && !$model['images']   => MODEL_ERROR_NO_IMAGES,
+            default                                       => null,
+        };
+        if ($error !== null) {
+            $errors[$key] = $error;
+        }
+    }
+
+    return $errors;
 }
 
 /**

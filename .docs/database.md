@@ -128,7 +128,7 @@
 | location | VARCHAR(2048) NULL | адрес ресурса / страницы / файла |
 | evidence | JSON NULL | для `check` — сырые данные (код ответа, фрагмент вывода); для `ai` — ссылки на факты: `{"finding_ids":[..],"stack_ids":[..],"screenshot_ids":[..]}` |
 | fingerprint | CHAR(40) NOT NULL | sha1 от `category + нормализованный location + ключ находки`; по нему сравниваются диагностики (фаза 5) |
-| ai_result_id | INT NULL FK → ai_results.id ON DELETE SET NULL | какой ответ ИИ породил находку. В фазах 1–3 колонка без FK (таблицы `ai_results` ещё нет); FK добавляется в фазе 4 через `ALTER TABLE` |
+| ai_result_id | INT NULL FK → ai_results.id ON DELETE SET NULL | какой ответ ИИ породил находку. В фазах 1–3 колонка была без FK; FK `fk_findings_ai_result` добавлен в фазе 4 через `ALTER TABLE` (`install.php`, `$foreignKeys`, только если его ещё нет) |
 | created_at | TIMESTAMP DEFAULT CURRENT_TIMESTAMP | |
 
 Индексы: `INDEX(diagnostic_id, severity)`, `INDEX(fingerprint)`.

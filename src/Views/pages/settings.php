@@ -5,6 +5,7 @@ declare(strict_types=1);
 /**
  * Настройки: модели RouterAI (форма), ключи API из .env (только просмотр), путь к Chrome (форма).
  * Ожидает: $title, $activeMenu, $modelFields (ключ → label, hint), $values (ключ → значение),
+ * $modelInfo (ключ → строка о модели из списка RouterAI или null), $defaultModel (модель по умолчанию),
  * $errors (ключ → текст ошибки), $isEmpty (модели ещё не сохранялись),
  * $envKeys (list: name, label, value; value = null — не задан),
  * $chromePath (сохранённый или введённый путь), $chromeError (?string), $chromeDefault (путь по умолчанию).
@@ -30,7 +31,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                         <div class="card-body">
                             <?php if ($isEmpty) : ?>
                                 <div class="alert alert-info" role="status">
-                                    <div class="alert-description">Модели ещё не заданы. Укажите их для всех трёх задач.</div>
+                                    <div class="alert-description">Используются модели по умолчанию — сохраните, чтобы закрепить.</div>
                                 </div>
                             <?php endif; ?>
                             <?php foreach ($modelFields as $fieldKey => $field) : ?>
@@ -46,7 +47,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                            name="<?= e($fieldKey) ?>"
                                            value="<?= e($values[$fieldKey] ?? '') ?>"
                                            maxlength="<?= e(MODEL_NAME_MAX_LENGTH) ?>"
-                                           placeholder="например, openai/gpt-4o-mini"
+                                           placeholder="<?= e($defaultModel) ?>"
                                            autocomplete="off"
                                            spellcheck="false"
                                            required
@@ -55,12 +56,18 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                     <?php if ($fieldError !== null) : ?>
                                         <div class="invalid-feedback" id="<?= e($fieldId) ?>-error"><?= e($fieldError) ?></div>
                                     <?php endif; ?>
-                                    <small class="form-hint" id="<?= e($fieldId) ?>-hint"><?= e($field['hint']) ?></small>
+                                    <small class="form-hint" id="<?= e($fieldId) ?>-hint">
+                                        <?= e($field['hint']) ?>
+                                        <?php if (($modelInfo[$fieldKey] ?? null) !== null) : ?>
+                                            <span class="d-block text-secondary"><?= e($modelInfo[$fieldKey]) ?></span>
+                                        <?php endif; ?>
+                                    </small>
                                 </div>
                             <?php endforeach; ?>
                         </div>
-                        <div class="card-footer text-end">
-                            <button type="submit" class="btn btn-primary btn-lg">Сохранить</button>
+                        <div class="card-footer d-flex flex-wrap justify-content-end gap-2">
+                            <button type="submit" class="btn btn-primary btn-lg" name="action" value="save">Сохранить</button>
+                            <button type="submit" class="btn btn-outline-primary btn-lg" name="action" value="check">Проверить подключение</button>
                         </div>
                     </form>
                 </section>

@@ -1,0 +1,198 @@
+{
+  "data": [
+    {
+      "id": "qwen/qwen3.7-max",
+      "name": "Qwen: Qwen3.7 Max",
+      "created": 1779376861,
+      "description": "Qwen3.7-Max является флагманской моделью в серии Qwen3.7 от Alibaba. Она поддерживает ввод и вывод текста и предназначен",
+      "context_length": 1000000,
+      "architecture": {
+        "modality": "text->text",
+        "tokenizer": "Qwen",
+        "instruct_type": null,
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "pricing": {
+        "prompt": 0.000157525693,
+        "completion": 0.000472577079,
+        "input_cache_read": 3.15051386e-05,
+        "input_cache_write": 0.00019690711625
+      },
+      "pricing_units": {
+        "prompt": "token",
+        "completion": "token",
+        "input_cache_read": "token",
+        "input_cache_write": "token"
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "default_parameters": {
+        "top_k": null,
+        "top_p": null,
+        "temperature": null,
+        "presence_penalty": null,
+        "frequency_penalty": null,
+        "repetition_penalty": null
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5.5",
+      "name": "Anthropic: Claude Sonnet 5.5",
+      "created": 1790618686,
+      "description": "Claude Sonnet 5.5 — это модель класса Sonnet от Anthropic для хорошо определенной повседневной работы, являющаяся прямым",
+      "context_length": 1000000,
+      "architecture": {
+        "modality": "text+image+file->text",
+        "tokenizer": "Claude",
+        "instruct_type": null,
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "pricing": {
+        "prompt": 0.00021359416,
+        "completion": 0.0010679708,
+        "web_search": 1.0679708,
+        "input_cache_read": 1.0679708e-05,
+        "input_cache_write": 0.0002669927
+      },
+      "pricing_units": {
+        "prompt": "token",
+        "completion": "token",
+        "web_search": "request",
+        "input_cache_read": "token",
+        "input_cache_write": "token"
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_completion_tokens",
+        "max_tokens",
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "stop",
+        "structured_outputs",
+        "tool_choice",
+        "tools",
+        "verbosity"
+      ],
+      "default_parameters": {}
+    },
+    {
+      "id": "google/gemini-decision-1",
+      "name": "Google: Gemini Decision 1",
+      "created": 1794402686,
+      "description": "Gemini Decision 1 — это модель Google для Decisions API. Она отвечает на структурированные вопросы о входном состоянии (",
+      "context_length": 262144,
+      "architecture": {
+        "modality": "text+image+audio+video+file->decisions",
+        "tokenizer": null,
+        "instruct_type": null,
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "file"
+        ],
+        "output_modalities": [
+          "decisions"
+        ]
+      },
+      "pricing": {
+        "prompt": 1.0679708e-05,
+        "completion": 0.0,
+        "web_search": 1.49515912
+      },
+      "pricing_units": {
+        "prompt": "token",
+        "completion": "token",
+        "web_search": "request"
+      },
+      "per_request_limits": null,
+      "supported_parameters": [],
+      "default_parameters": null
+    },
+    {
+      "id": "qwen/qwen4-max",
+      "name": "Qwen: Qwen4 Max",
+      "created": 1794795526,
+      "description": "Qwen4 Max — флагманская модель в серии Qwen4 от Alibaba. Она принимает на вход текст, изображения и видео и возвращает т",
+      "context_length": 1000000,
+      "architecture": {
+        "modality": "text+image+video->text",
+        "tokenizer": "Qwen",
+        "instruct_type": null,
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "pricing": {
+        "prompt": 0.00016019562,
+        "completion": 0.00048058686,
+        "input_cache_read": 8.009781e-06,
+        "input_cache_write": 0.000200244525
+      },
+      "pricing_units": {
+        "prompt": "token",
+        "completion": "token",
+        "input_cache_read": "token",
+        "input_cache_write": "token"
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "default_parameters": {}
+    }
+  ]
+}
