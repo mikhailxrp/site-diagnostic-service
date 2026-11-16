@@ -1,0 +1,78 @@
+{
+    "11111111-0000-0000-0000-000000000001": {
+        "id": "11111111-0000-0000-0000-000000000001",
+        "title": "Test Plugin < 0.9.138 - Path Traversal \"quoted\" {braces} [brackets], commas: yes",
+        "software": [
+            {
+                "type": "plugin",
+                "name": "Test Plugin",
+                "slug": "test-plugin",
+                "affected_versions": {
+                    "[*, 0.9.138)": {
+                        "from_version": "*",
+                        "from_inclusive": true,
+                        "to_version": "0.9.138",
+                        "to_inclusive": false
+                    }
+                },
+                "patched": true,
+                "patched_versions": ["0.9.138"]
+            }
+        ],
+        "informational": false,
+        "references": ["https:\/\/www.wordfence.com\/threat-intel\/vulnerabilities\/id\/11111111-0000-0000-0000-000000000001"],
+        "cvss": {"vector": "CVSS:3.1\/AV:N", "score": 9.8, "rating": "Critical"},
+        "cve": "CVE-2026-0001",
+        "published": "2026-11-04 00:00:00"
+    },
+    "11111111-0000-0000-0000-000000000002": {
+        "id": "11111111-0000-0000-0000-000000000002",
+        "title": "Test Theme <= 2.0 - XSS \\ backslash",
+        "software": [
+            {
+                "type": "theme",
+                "name": "Test Theme",
+                "slug": "Test-Theme",
+                "affected_versions": {
+                    "[1.0, 2.0]": {"from_version": "1.0", "from_inclusive": true, "to_version": "2.0", "to_inclusive": true}
+                },
+                "patched": false,
+                "patched_versions": []
+            }
+        ],
+        "informational": false,
+        "references": [],
+        "cvss": {"score": 6.1, "rating": "Medium"},
+        "cve": null
+    },
+    "11111111-0000-0000-0000-000000000003": {
+        "id": "11111111-0000-0000-0000-000000000003",
+        "title": "WordPress Core < 6.4.3 - Object Injection",
+        "software": [
+            {
+                "type": "core",
+                "name": "WordPress Core",
+                "slug": "wordpress",
+                "affected_versions": {
+                    "[6.4, 6.4.3)": {"from_version": "6.4", "from_inclusive": true, "to_version": "6.4.3", "to_inclusive": false},
+                    "[*, 6.3.3)": {"from_version": "*", "from_inclusive": true, "to_version": "6.3.3", "to_inclusive": false}
+                },
+                "patched": true,
+                "patched_versions": ["6.3.3", "6.4.3"]
+            }
+        ],
+        "informational": false,
+        "references": ["https:\/\/www.wordfence.com\/threat-intel\/vulnerabilities\/id\/11111111-0000-0000-0000-000000000003"],
+        "cvss": {"score": 7.2, "rating": "High"},
+        "cve": "CVE-2024-0003"
+    },
+    "11111111-0000-0000-0000-000000000004": {
+        "id": "11111111-0000-0000-0000-000000000004",
+        "title": "Closed plugin notice",
+        "software": [
+            {"type": "plugin", "name": "Closed", "slug": "closed-plugin", "affected_versions": {"[*, *]": {"from_version": "*", "from_inclusive": true, "to_version": "*", "to_inclusive": true}}, "patched": false, "patched_versions": []}
+        ],
+        "informational": true,
+        "references": []
+    }
+}

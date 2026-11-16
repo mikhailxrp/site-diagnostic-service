@@ -1,0 +1,73 @@
+{
+    "updated_at": "2026-11-16",
+    "about": "Уязвимости 1С-Битрикс: Управление сайтом — ядро (core) и модули (modules). Пополняется вручную; каждая запись — со ссылкой на источник. Собрано 16.11.2026 из NVD (запрос keywordSearch=bitrix); БДУ ФСТЭК (bdu.fstec.ru) с этого ПК недоступна — сертификат российского УЦ, записи БДУ добавлять с идентификатором «БДУ:ГГГГ-NNNNN». Модуль: builtin = true — входит в поставку (проверяется на каждом сайте на Битриксе), иначе — по пространству имён компонентов (namespace: /bitrix/components/<namespace>/). Версия модуля с сайта не видна — находка info «проверить версию».",
+    "core": [
+        {
+            "ids": ["CVE-2005-1996"],
+            "title": "Удалённое подключение файла (RFI) в start.php через параметр _SERVER[DOCUMENT_ROOT] — выполнение произвольного PHP-кода",
+            "ranges": [{"from": "4.0.0", "from_inclusive": true, "to": "4.0.8", "to_inclusive": true}],
+            "fixed": [],
+            "cvss": 5.0,
+            "url": "https://nvd.nist.gov/vuln/detail/CVE-2005-1996"
+        },
+        {
+            "ids": ["CVE-2006-2476"],
+            "title": "updater.log лежит в корне сайта без защиты — утечка служебных данных",
+            "ranges": [{"from": "*", "from_inclusive": true, "to": "4.1.0", "to_inclusive": true}],
+            "fixed": [],
+            "cvss": 5.0,
+            "url": "https://nvd.nist.gov/vuln/detail/CVE-2006-2476"
+        },
+        {
+            "ids": ["CVE-2006-2479"],
+            "title": "Обновление не проверяет подлинность загруженных файлов — подмена обновления и выполнение PHP-кода",
+            "ranges": [{"from": "4.0.0", "from_inclusive": true, "to": "4.1.0", "to_inclusive": true}],
+            "fixed": [],
+            "cvss": 5.0,
+            "url": "https://nvd.nist.gov/vuln/detail/CVE-2006-2479"
+        },
+        {
+            "ids": ["CVE-2008-2052"],
+            "title": "Открытый редирект в redirect.php через параметр goto — фишинг",
+            "ranges": [{"from": "6.5", "from_inclusive": true, "to": "6.5", "to_inclusive": true}],
+            "fixed": [],
+            "cvss": 6.1,
+            "url": "https://nvd.nist.gov/vuln/detail/CVE-2008-2052"
+        }
+    ],
+    "modules": [
+        {
+            "module": "vote",
+            "name": "Опросы, голосования",
+            "builtin": true,
+            "ids": ["CVE-2022-27228"],
+            "title": "Модуль vote: выполнение произвольного кода без авторизации",
+            "ranges": [{"from": "*", "from_inclusive": true, "to": "21.0.100", "to_inclusive": false}],
+            "fixed": ["21.0.100"],
+            "cvss": 9.8,
+            "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-27228"
+        },
+        {
+            "module": "mcart.xls",
+            "name": "mcart.xls (импорт из Excel)",
+            "namespace": "mcart",
+            "ids": ["CVE-2015-8356"],
+            "title": "SQL-инъекции в админке импорта (xls_profile и др.) для авторизованных пользователей",
+            "ranges": [{"from": "*", "from_inclusive": true, "to": "6.5.2", "to_inclusive": true}],
+            "fixed": [],
+            "cvss": 8.0,
+            "url": "https://nvd.nist.gov/vuln/detail/CVE-2015-8356"
+        },
+        {
+            "module": "orion.extfeedbackform",
+            "name": "orion.extfeedbackform (форма обратной связи)",
+            "namespace": "orion",
+            "ids": ["CVE-2015-8355"],
+            "title": "SQL-инъекции через параметры order и by для авторизованных пользователей",
+            "ranges": [{"from": "*", "from_inclusive": true, "to": "2.1.2", "to_inclusive": true}],
+            "fixed": ["2.1.3"],
+            "cvss": 8.8,
+            "url": "https://nvd.nist.gov/vuln/detail/CVE-2015-8355"
+        }
+    ]
+}

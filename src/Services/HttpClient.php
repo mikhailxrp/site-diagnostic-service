@@ -370,3 +370,77 @@ function sendCurlRequest(array $request): array
         'error'     => $error,
     ];
 }
+
+/**
+ * Скачивание большого файла с известного источника баз (Wordfence) сразу на диск: без предела HTTP_MAX_BODY_BYTES,
+ * со своими заголовками (`Authorization`), тайм-аутом и пределом размера. Только https, редиректы — силами curl.
+ * Для адресов из диагностики не используется: там нужен `httpRequest()` с проверкой хоста.
+ * Файл при ошибке или превышении предела удаляется.
+ *
+ * @param list<string> $headers строки заголовков `Имя: значение`
+ * @return array{status: ?int, bytes: int, error: ?string}
+ */
+function httpDownloadToFile(string $url, string $path, array $headers, int $timeoutSeconds, int $maxBytes): array
+{
+    if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
+        return ['status' => null, 'bytes' => 0, 'error' => 'Скачивание баз — только по https.'];
+    }
+
+    $file = fopen($path, 'wb');
+    if ($file === false) {
+        return ['status' => null, 'bytes' => 0, 'error' => "Не удалось открыть {$path} на запись."];
+    }
+
+    $handle = curl_init();
+    if ($handle === false) {
+        fclose($file);
+        unlink($path);
+
+        return ['status' => null, 'bytes' => 0, 'error' => 'Не удалось запустить curl.'];
+    }
+
+    $bytes = 0;
+    $tooLarge = false;
+    curl_setopt_array($handle, [
+        CURLOPT_URL            => $url,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => HTTP_MAX_REDIRECTS,
+        CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_CONNECTTIMEOUT => HTTP_CONNECT_TIMEOUT_SECONDS,
+        CURLOPT_TIMEOUT        => $timeoutSeconds,
+        CURLOPT_USERAGENT      => HTTP_USER_AGENT,
+        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_ENCODING       => '',
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_WRITEFUNCTION  => static function ($curl, string $chunk) use ($file, &$bytes, &$tooLarge, $maxBytes): int {
+            $bytes += strlen($chunk);
+            if ($bytes > $maxBytes) {
+                $tooLarge = true;
+
+                return 0; // 0 — curl обрывает загрузку
+            }
+
+            return (int) fwrite($file, $chunk);
+        },
+    ]);
+    curl_exec($handle);
+
+    $errno = curl_errno($handle);
+    $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+    $error = match (true) {
+        $tooLarge                     => 'Файл больше предела ' . intdiv($maxBytes, 1024 * 1024) . ' МБ.',
+        $errno === 0                  => null,
+        $errno === CURL_ERROR_TIMEOUT => 'Источник не ответил вовремя: ' . curl_error($handle) . " (curl {$errno})",
+        default                       => curl_error($handle) . " (curl {$errno})",
+    };
+    curl_close($handle);
+    fclose($file);
+
+    if ($error !== null) {
+        unlink($path);
+    }
+
+    return ['status' => $status > 0 ? $status : null, 'bytes' => $bytes, 'error' => $error];
+}

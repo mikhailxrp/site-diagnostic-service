@@ -35,7 +35,7 @@ const SETTINGS_ENV_KEYS = [
     'ROUTERAI_BASE_URL' => ['label' => 'RouterAI: адрес API', 'secret' => false],
     'ROUTERAI_API_KEY'  => ['label' => 'RouterAI: ключ API', 'secret' => true],
     'PAGESPEED_API_KEY' => ['label' => 'Google PageSpeed Insights', 'secret' => true],
-    'WPSCAN_API_KEY'    => ['label' => 'WPScan', 'secret' => true],
+    'WORDFENCE_API_KEY' => ['label' => 'Wordfence Intelligence', 'secret' => true],
 ];
 
 /**

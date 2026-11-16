@@ -3,12 +3,13 @@
 declare(strict_types=1);
 
 /**
- * Локальные базы (справочник версий; в таске 7 — уязвимости): реестр источников, обновление с атомарной заменой
+ * Локальные базы (справочник версий, уязвимости Wordfence и retire.js): реестр источников, обновление с атомарной заменой
  * файла, блокировка повторного запуска, чтение рабочей базы или начальной из `data/`.
  * Новая база = запись в `getDatabaseSources()`, `bin/update-databases.php` не меняется.
  */
 
 require_once ROOT_PATH . '/src/Services/VersionSources.php';
+require_once ROOT_PATH . '/src/Services/VulnerabilityDatabases.php';
 
 const DATABASES_DIR      = ROOT_PATH . '/storage/databases';
 const DATABASES_SEED_DIR = ROOT_PATH . '/data';
@@ -29,6 +30,21 @@ function getDatabaseSources(): array
             'file'   => 'latest-versions.json',
             'update' => static fn (?array $previous, callable $request): array
                 => updateLatestVersionsDatabase($previous, $request),
+        ],
+        'wordfence' => [
+            'title'  => 'База уязвимостей WordPress',
+            'file'   => 'wordfence-vulnerabilities.json',
+            'update' => static fn (?array $previous, callable $request): array => updateWordfenceDatabase(
+                env(WORDFENCE_TOKEN_ENV, ''),
+                static fn (string $url, string $path, array $headers): array
+                    => httpDownloadToFile($url, $path, $headers, WORDFENCE_TIMEOUT_SECONDS, WORDFENCE_MAX_BYTES),
+                DATABASES_DIR . '/wordfence-vulnerabilities.json' . WORDFENCE_DOWNLOAD_SUFFIX
+            ),
+        ],
+        'retire' => [
+            'title'  => 'База уязвимостей JS',
+            'file'   => 'retire-vulnerabilities.json',
+            'update' => static fn (?array $previous, callable $request): array => updateRetireDatabase($request),
         ],
     ];
 }
@@ -120,7 +136,8 @@ function loadDatabase(string $key, ?string $dir = null, ?string $seedDir = null)
 }
 
 /**
- * Дата базы — самая старая из дат её записей (одна устаревшая запись делает базу устаревшей); null — дат нет.
+ * Дата базы — самая старая из дат её записей (одна устаревшая запись делает базу устаревшей); у записей дат нет —
+ * общая `updated_at` файла; null — дат нет.
  *
  * @param array<string, mixed>|null $database
  */
@@ -133,7 +150,10 @@ function getDatabaseDate(?array $database): ?string
         }
     }
     if ($dates === []) {
-        return null;
+        // У баз уязвимостей записи без дат — дата общая на файл
+        $updated = $database['updated_at'] ?? null;
+
+        return is_string($updated) && strtotime($updated) !== false ? $updated : null;
     }
 
     usort($dates, static fn (string $a, string $b): int => strtotime($a) <=> strtotime($b));

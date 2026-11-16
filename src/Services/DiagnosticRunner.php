@@ -22,6 +22,7 @@ require_once ROOT_PATH . '/src/Services/Checks/MixedContentCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/BotProtectionCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SeoCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/OutdatedCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/VulnerabilityCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
@@ -48,6 +49,7 @@ function getDiagnosticSteps(): array
         ['code' => 'availability', 'title' => 'Доступность сайта', 'handler' => 'runAvailabilityStep'],
         ['code' => 'stack',        'title' => 'Определение стека',       'handler' => 'runStackStep'],
         ['code' => 'outdated',     'title' => 'Устаревшие версии',       'handler' => 'runOutdatedStep'],
+        ['code' => 'vulnerabilities', 'title' => 'Уязвимости',           'handler' => 'runVulnerabilitiesStep'],
         ['code' => 'crawl',        'title' => 'Поиск страниц магазина', 'handler' => 'runCrawlStep'],
         ['code' => 'resources',    'title' => 'Битые ресурсы',           'handler' => 'runResourcesStep'],
         ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
@@ -129,6 +131,23 @@ function runOutdatedStep(array $context): array
         updateStackItemLatestVersion((int) $stackItemId, $latestVersion);
     }
     updateDiagnosticSummary((int) $context['diagnostic']['id'], ['databases' => $result['facts']['databases']]);
+
+    return $result;
+}
+
+/**
+ * Шаг `vulnerabilities` с БД: даты баз уязвимостей, с которыми сверялся стек, — в `summary_json.databases`
+ * (рядом с базой версий). Находки сохраняет `runDiagnostic()`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runVulnerabilitiesStep(array $context): array
+{
+    $result = runVulnerabilityCheck($context);
+    if ($result['status'] === STEP_STATUS_DONE && $result['facts']['databases'] !== []) {
+        updateDiagnosticSummary((int) $context['diagnostic']['id'], ['databases' => $result['facts']['databases']]);
+    }
 
     return $result;
 }

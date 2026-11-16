@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Обновление локальных баз (справочник версий; в таске 7 — уязвимости) из внешних источников.
+ * Обновление локальных баз (справочник версий, уязвимости Wordfence и retire.js) из внешних источников.
  *
  * Запуск из консоли или Планировщиком заданий (bin/schedule-update-databases.ps1), из корня проекта:
  *   "C:/OSPanel/modules/PHP-8.3/PHP/php.exe" bin/update-databases.php
