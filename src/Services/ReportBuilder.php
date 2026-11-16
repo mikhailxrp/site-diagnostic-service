@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
 require_once ROOT_PATH . '/src/Services/FindingFactory.php';
+require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
 
 /** Статусы диагностики, для которых строится отчёт; при `failed` — частичный (то, что успело собраться) */
 const REPORT_STATUSES         = ['done', 'failed'];
@@ -164,6 +165,35 @@ const REPORT_DATABASE_STALE_WARNING = 'База не обновлялась бо
     . 'Планировщика «Site Diagnostics - обновление баз».';
 const REPORT_SECONDS_PER_DAY      = 86400;
 
+/** Карточка «Скорость» (`summary_json.pagespeed`, шаг `pagespeed`) */
+const REPORT_SPEED_RATING_BADGES = [
+    SPEED_RATING_GOOD  => REPORT_BADGE_GOOD,
+    SPEED_RATING_NEEDS => REPORT_BADGE_WARNING,
+    SPEED_RATING_POOR  => REPORT_BADGE_BAD,
+];
+const REPORT_SPEED_LAB_METRICS = [
+    'lcp' => 'LCP — основное содержимое',
+    'cls' => 'CLS — сдвиги макета',
+    'tbt' => 'TBT — блокировка потока',
+    'fcp' => 'FCP — первая отрисовка',
+];
+const REPORT_SPEED_FIELD_METRICS = [
+    'lcp' => 'LCP — основное содержимое',
+    'inp' => 'INP — отклик на действия',
+    'cls' => 'CLS — сдвиги макета',
+    'fcp' => 'FCP — первая отрисовка',
+];
+const REPORT_SPEED_NO_VALUE      = '—';
+const REPORT_SPEED_ORIGIN_NOTE   = '%s: по самой главной у Google данных нет — показаны данные по всему сайту.';
+const REPORT_SPEED_ERROR         = '%s: не удалось проверить — %s';
+const REPORT_SPEED_WARNING       = '%s: %s';
+const REPORT_SPEED_LAB_TABLE_ID   = 'report-speed-lab';
+const REPORT_SPEED_LAB_TITLE      = 'Лаборатория (Lighthouse, один прогон на серверах Google)';
+const REPORT_SPEED_LAB_EMPTY      = 'Lighthouse не вернул лабораторных метрик.';
+const REPORT_SPEED_FIELD_TABLE_ID = 'report-speed-field';
+const REPORT_SPEED_FIELD_TITLE    = 'Реальные пользователи (Chrome UX Report, 28 дней)';
+const REPORT_SPEED_FIELD_EMPTY    = 'У Google нет данных реальных пользователей по этому сайту.';
+
 const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     | JSON_INVALID_UTF8_SUBSTITUTE;
 
@@ -173,7 +203,8 @@ const REPORT_JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNES
  * @param list<array<string, mixed>> $stackItems из getStackItemsByDiagnostic()
  * @param list<array<string, mixed>> $pages      из getCheckedPagesByDiagnostic()
  * @param list<array<string, mixed>> $screenshots из getScreenshotsByDiagnostic()
- * @return array{partial: bool, productUrl: ?string, summary: ?array, pages: list<array>, findingCount: int,
+ * @return array{partial: bool, productUrl: ?string, summary: ?array, pagespeed: ?array, pages: list<array>,
+ *               findingCount: int,
  *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
  *               stackGroups: list<array>, databases: list<array>, databasesStale: bool, databasesWarning: string,
  *               uncheckedSteps: list<array>}
@@ -192,6 +223,7 @@ function buildReport(array $diagnostic, array $findings, array $stackItems, arra
             ? (string) $diagnostic['product_url']
             : null,
         'summary'           => buildReportSummary($summary, findHomeBlockedReason($pages, $blocked)),
+        'pagespeed'         => buildReportPageSpeed($summary['pagespeed'] ?? null),
         'pages'             => buildReportPages(
             $pages,
             $summary['pages'] ?? null,
@@ -330,6 +362,138 @@ function buildReportFlagRow(string $label, mixed $flag, string $yes, string $no)
         false   => ['label' => $label, 'value' => $no, 'badgeClass' => REPORT_BADGE_BAD],
         default => ['label' => $label, 'value' => 'не проверено', 'badgeClass' => REPORT_BADGE_NEUTRAL],
     };
+}
+
+/**
+ * Карточка «Скорость»: оценки mobile / desktop, лабораторные метрики, данные реальных пользователей,
+ * предупреждения Lighthouse и ошибки стратегий. Шага не было или ни одна стратегия не удалась → null.
+ *
+ * @param mixed $pagespeed `summary_json.pagespeed`: url, mobile, desktop (`parsePageSpeedResponse()`), errors
+ * @return array{url: string, lighthouseVersion: ?string,
+ *               scores: list<array{label: string, value: string, ratingLabel: ?string, badgeClass: string}>,
+ *               alerts: list<string>,
+ *               tables: list<array{id: string, title: string, columns: list<string>, rows: list<array>, empty: string,
+ *                                  note: ?string}>}|null
+ */
+function buildReportPageSpeed(mixed $pagespeed): ?array
+{
+    if (!is_array($pagespeed)) {
+        return null;
+    }
+
+    $results = [];
+    foreach (PAGESPEED_STRATEGIES as $strategy) {
+        $results[$strategy] = is_array($pagespeed[$strategy] ?? null) ? $pagespeed[$strategy] : null;
+    }
+    if (array_filter($results) === []) {
+        return null;
+    }
+
+    $errors = is_array($pagespeed['errors'] ?? null) ? $pagespeed['errors'] : [];
+    $columns = [];
+    $originColumns = [];
+    $scores = [];
+    $alerts = [];
+    $version = null;
+
+    foreach ($results as $strategy => $result) {
+        $label = SPEED_STRATEGY_LABELS[$strategy];
+        $columns[] = $label;
+        if (($result['field_scope'] ?? null) === PAGESPEED_FIELD_SCOPE_ORIGIN) {
+            $originColumns[] = $label;
+        }
+        $scores[] = buildReportSpeedScore($label, $result['score'] ?? null);
+
+        if ($result === null) {
+            $alerts[] = sprintf(REPORT_SPEED_ERROR, $label, (string) ($errors[$strategy] ?? PAGESPEED_ERROR_NO_RESPONSE));
+            continue;
+        }
+        foreach ($result['warnings'] ?? [] as $warning) {
+            $alerts[] = sprintf(REPORT_SPEED_WARNING, $label, (string) $warning);
+        }
+        $version ??= is_string($result['lighthouse_version'] ?? null) ? $result['lighthouse_version'] : null;
+    }
+
+    $hasField = array_filter(array_column(array_filter($results), 'field')) !== [];
+
+    return [
+        'url'               => (string) ($pagespeed['url'] ?? ''),
+        'lighthouseVersion' => $version,
+        'scores'            => $scores,
+        'alerts'            => $alerts,
+        'tables'            => [
+            [
+                'id'      => REPORT_SPEED_LAB_TABLE_ID,
+                'title'   => REPORT_SPEED_LAB_TITLE,
+                'columns' => $columns,
+                'rows'    => buildReportSpeedRows($results, 'lab', REPORT_SPEED_LAB_METRICS),
+                'empty'   => REPORT_SPEED_LAB_EMPTY,
+                'note'    => null,
+            ],
+            [
+                'id'      => REPORT_SPEED_FIELD_TABLE_ID,
+                'title'   => REPORT_SPEED_FIELD_TITLE,
+                'columns' => $columns,
+                'rows'    => $hasField ? buildReportSpeedRows($results, 'field', REPORT_SPEED_FIELD_METRICS) : [],
+                'empty'   => REPORT_SPEED_FIELD_EMPTY,
+                // Подпись под таблицей, а не в заголовке колонки: длинный заголовок не помещается на 360 px
+                'note'    => $hasField && $originColumns !== []
+                    ? sprintf(REPORT_SPEED_ORIGIN_NOTE, implode(', ', $originColumns))
+                    : null,
+            ],
+        ],
+    ];
+}
+
+/**
+ * @return array{label: string, value: string, ratingLabel: ?string, badgeClass: string}
+ */
+function buildReportSpeedScore(string $label, mixed $score): array
+{
+    if (!is_int($score)) {
+        return ['label' => $label, 'value' => REPORT_SPEED_NO_VALUE, 'ratingLabel' => null,
+            'badgeClass' => REPORT_BADGE_NEUTRAL];
+    }
+    $rating = rateSpeedScore($score);
+
+    return [
+        'label'       => $label,
+        'value'       => (string) $score,
+        'ratingLabel' => SPEED_RATING_LABELS[$rating],
+        'badgeClass'  => REPORT_SPEED_RATING_BADGES[$rating],
+    ];
+}
+
+/**
+ * Строки таблицы метрик: показатель → ячейка по каждой стратегии (нет значения → null).
+ *
+ * @param array<string, ?array>  $results стратегия → результат
+ * @param string                 $source  `lab` | `field`
+ * @param array<string, string>  $metrics показатель → подпись
+ * @return list<array{label: string, cells: list<?array{value: string, ratingLabel: string, badgeClass: string}>}>
+ */
+function buildReportSpeedRows(array $results, string $source, array $metrics): array
+{
+    $rows = [];
+    foreach ($metrics as $metric => $label) {
+        $cells = [];
+        foreach ($results as $result) {
+            $value = $result[$source][$metric] ?? null;
+            if (!is_int($value) && !is_float($value)) {
+                $cells[] = null;
+                continue;
+            }
+            $rating = rateSpeedMetric($metric, $value);
+            $cells[] = [
+                'value'       => formatSpeedValue($metric, $value),
+                'ratingLabel' => SPEED_RATING_LABELS[$rating],
+                'badgeClass'  => REPORT_SPEED_RATING_BADGES[$rating],
+            ];
+        }
+        $rows[] = ['label' => $label, 'cells' => $cells];
+    }
+
+    return $rows;
 }
 
 /**

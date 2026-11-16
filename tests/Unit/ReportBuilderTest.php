@@ -547,6 +547,110 @@ final class ReportBuilderTest extends TestCase
         $this->assertStringStartsWith('истёк', $expired[0]['value']);
     }
 
+    public function testPageSpeedCardFromRealResponses(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['pagespeed' => [
+            'url'     => 'https://sudar.su/',
+            'mobile'  => $this->pageSpeedResult('sudar-mobile.json'),
+            'desktop' => $this->pageSpeedResult('sudar-desktop.json'),
+            'errors'  => [],
+        ]]);
+
+        $card = buildReport($diagnostic, [], [], [])['pagespeed'];
+
+        $this->assertSame('https://sudar.su/', $card['url']);
+        $this->assertSame('13.6.0', $card['lighthouseVersion']);
+        $this->assertSame(['39', '55'], array_column($card['scores'], 'value'));
+        $this->assertSame([REPORT_BADGE_BAD, REPORT_BADGE_WARNING], array_column($card['scores'], 'badgeClass'));
+        $this->assertSame(['плохо', 'требует улучшения'], array_column($card['scores'], 'ratingLabel'));
+        $this->assertCount(1, $card['alerts']);
+        $this->assertStringStartsWith('Mobile: Страница загружалась слишком медленно', $card['alerts'][0]);
+
+        [$lab, $field] = $card['tables'];
+        $this->assertSame(['Mobile', 'Desktop'], $lab['columns']);
+        $this->assertSame(array_values(REPORT_SPEED_LAB_METRICS), array_column($lab['rows'], 'label'));
+        $this->assertSame(
+            ['value' => '14,3 с', 'ratingLabel' => 'плохо', 'badgeClass' => REPORT_BADGE_BAD],
+            $lab['rows'][0]['cells'][0]
+        );
+        $this->assertSame(
+            ['value' => '0,229', 'ratingLabel' => 'требует улучшения', 'badgeClass' => REPORT_BADGE_WARNING],
+            $lab['rows'][1]['cells'][1]
+        );
+
+        $this->assertSame(REPORT_SPEED_FIELD_TITLE, $field['title']);
+        $this->assertSame(['Mobile', 'Desktop'], $field['columns']);
+        $this->assertSame(array_values(REPORT_SPEED_FIELD_METRICS), array_column($field['rows'], 'label'));
+        $this->assertSame('117 мс', $field['rows'][1]['cells'][0]['value']);
+        $this->assertSame(REPORT_BADGE_GOOD, $field['rows'][1]['cells'][0]['badgeClass']);
+    }
+
+    public function testPageSpeedCardWithFailedStrategyAndOriginData(): void
+    {
+        // JSON_MERGE_PATCH в БД убирает ключи со значением null — стратегии с ошибкой в сводке нет совсем
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['pagespeed' => [
+            'url'    => 'https://sudar.su/',
+            'mobile' => $this->pageSpeedResult('synthetic-origin-fallback.json'),
+            'errors' => ['desktop' => 'HTTP 400: Lighthouse returned error: FAILED_DOCUMENT_REQUEST.'],
+        ]]);
+
+        $card = buildReport($diagnostic, [], [], [])['pagespeed'];
+
+        $this->assertSame(['39', REPORT_SPEED_NO_VALUE], array_column($card['scores'], 'value'));
+        $this->assertSame(REPORT_BADGE_NEUTRAL, $card['scores'][1]['badgeClass']);
+        $this->assertContains(
+            'Desktop: не удалось проверить — HTTP 400: Lighthouse returned error: FAILED_DOCUMENT_REQUEST.',
+            $card['alerts']
+        );
+        $this->assertSame(['Mobile', 'Desktop'], $card['tables'][1]['columns']);
+        $this->assertSame(
+            'Mobile: по самой главной у Google данных нет — показаны данные по всему сайту.',
+            $card['tables'][1]['note']
+        );
+        $this->assertNull($card['tables'][0]['note']);
+        foreach ($card['tables'] as $table) {
+            foreach ($table['rows'] as $row) {
+                $this->assertNull($row['cells'][1]);
+            }
+        }
+    }
+
+    public function testPageSpeedCardWithoutFieldData(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['pagespeed' => [
+            'url'     => 'https://sudar.su/',
+            'mobile'  => $this->pageSpeedResult('synthetic-no-field.json'),
+            'desktop' => $this->pageSpeedResult('synthetic-no-field.json'),
+            'errors'  => [],
+        ]]);
+
+        $field = buildReport($diagnostic, [], [], [])['pagespeed']['tables'][1];
+
+        $this->assertSame([], $field['rows']);
+        $this->assertSame(REPORT_SPEED_FIELD_EMPTY, $field['empty']);
+    }
+
+    public function testNoPageSpeedCardForOldDiagnosticsOrBrokenData(): void
+    {
+        $this->assertNull(buildReport($this->diagnostic(), [], [], [])['pagespeed']);
+        $this->assertNull(buildReportPageSpeed(null));
+        $this->assertNull(buildReportPageSpeed('мусор'));
+        $this->assertNull(buildReportPageSpeed(['url' => 'https://sudar.su/', 'errors' => ['mobile' => 'x']]));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function pageSpeedResult(string $fixture): array
+    {
+        $body = (string) file_get_contents(ROOT_PATH . '/tests/fixtures/pagespeed/' . $fixture);
+
+        return parsePageSpeedResponse($body)['result'];
+    }
+
     /**
      * @param list<array<string, mixed>> $steps
      * @return array<string, mixed>

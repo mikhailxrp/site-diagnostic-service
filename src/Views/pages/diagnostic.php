@@ -200,6 +200,84 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                     <?php endif; ?>
                                 </section>
                             </div>
+                            <?php if ($report['pagespeed'] !== null) : ?>
+                                <div class="col-12">
+                                    <section class="card" aria-labelledby="report-speed-title">
+                                        <div class="card-header">
+                                            <div>
+                                                <h2 class="card-title" id="report-speed-title">Скорость</h2>
+                                                <p class="card-subtitle text-break mb-0">
+                                                    PageSpeed Insights, главная: <?= e($report['pagespeed']['url']) ?>
+                                                    <?php if ($report['pagespeed']['lighthouseVersion'] !== null) : ?>
+                                                        · Lighthouse <?= e($report['pagespeed']['lighthouseVersion']) ?>
+                                                    <?php endif; ?>
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <dl class="datagrid mb-0">
+                                                <?php foreach ($report['pagespeed']['scores'] as $score) : ?>
+                                                    <div class="datagrid-item">
+                                                        <dt class="datagrid-title">Оценка, <?= e($score['label']) ?></dt>
+                                                        <dd class="datagrid-content mb-0">
+                                                            <span class="badge <?= e($score['badgeClass']) ?> fs-3"><?= e($score['value']) ?></span>
+                                                            <?php if ($score['ratingLabel'] !== null) : ?>
+                                                                <span class="text-secondary small"><?= e($score['ratingLabel']) ?></span>
+                                                            <?php endif; ?>
+                                                        </dd>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </dl>
+                                            <?php foreach ($report['pagespeed']['alerts'] as $alert) : ?>
+                                                <div class="alert alert-warning mt-3 mb-0" role="status">
+                                                    <div class="alert-description text-break"><?= e($alert) ?></div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <?php foreach ($report['pagespeed']['tables'] as $speedTable) : ?>
+                                            <div class="card-body border-top">
+                                                <h3 class="h4" id="<?= e($speedTable['id']) ?>"><?= e($speedTable['title']) ?></h3>
+                                                <?php if ($speedTable['rows'] === []) : ?>
+                                                    <p class="text-secondary mb-0"><?= e($speedTable['empty']) ?></p>
+                                                <?php else : ?>
+                                                    <div class="table-responsive">
+                                                        <table class="table table-vcenter mb-0" aria-labelledby="<?= e($speedTable['id']) ?>">
+                                                            <thead>
+                                                                <tr>
+                                                                    <th scope="col">Метрика</th>
+                                                                    <?php foreach ($speedTable['columns'] as $column) : ?>
+                                                                        <th scope="col"><?= e($column) ?></th>
+                                                                    <?php endforeach; ?>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <?php foreach ($speedTable['rows'] as $speedRow) : ?>
+                                                                    <tr>
+                                                                        <th scope="row" class="fw-normal"><?= e($speedRow['label']) ?></th>
+                                                                        <?php foreach ($speedRow['cells'] as $cell) : ?>
+                                                                            <td>
+                                                                                <?php if ($cell === null) : ?>
+                                                                                    <span class="text-secondary">—</span>
+                                                                                <?php else : ?>
+                                                                                    <span class="badge <?= e($cell['badgeClass']) ?>"><?= e($cell['value']) ?></span>
+                                                                                    <div class="text-secondary small"><?= e($cell['ratingLabel']) ?></div>
+                                                                                <?php endif; ?>
+                                                                            </td>
+                                                                        <?php endforeach; ?>
+                                                                    </tr>
+                                                                <?php endforeach; ?>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                    <?php if ($speedTable['note'] !== null) : ?>
+                                                        <p class="text-secondary small mt-2 mb-0"><?= e($speedTable['note']) ?></p>
+                                                    <?php endif; ?>
+                                                <?php endif; ?>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </section>
+                                </div>
+                            <?php endif; ?>
                             <div class="col-12">
                                 <section class="card" aria-labelledby="report-pages-title">
                                     <div class="card-header">

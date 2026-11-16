@@ -455,13 +455,15 @@ function httpDownloadToFile(string $url, string $path, array $headers, int $time
  * там нужен `httpRequest()` с проверкой хоста.
  *
  * @param array<string, mixed>|null $json null — GET; массив — POST с этим телом в JSON
+ * @param list<string>              $extraHeaders дополнительные заголовки `Имя: значение` (ключ API и т. п.)
  * @return array{status: ?int, body: string, error: ?string}
  */
 function httpApiRequest(
     string $url,
     ?array $json = null,
     int $timeoutSeconds = HTTP_API_TIMEOUT_SECONDS,
-    int $maxBytes = HTTP_API_MAX_BODY_BYTES
+    int $maxBytes = HTTP_API_MAX_BODY_BYTES,
+    array $extraHeaders = []
 ): array {
     if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
         return ['status' => null, 'body' => '', 'error' => 'Запросы к API — только по https.'];
@@ -474,7 +476,7 @@ function httpApiRequest(
 
     $body = '';
     $tooLarge = false;
-    $headers = ['Accept: application/json'];
+    $headers = ['Accept: application/json', ...$extraHeaders];
     $options = [
         CURLOPT_URL             => $url,
         CURLOPT_FOLLOWLOCATION  => true,

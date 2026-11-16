@@ -27,6 +27,7 @@ require_once ROOT_PATH . '/src/Services/Checks/BotProtectionCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SeoCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/OutdatedCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/VulnerabilityCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
@@ -58,6 +59,7 @@ function getDiagnosticSteps(): array
         ['code' => 'resources',    'title' => 'Битые ресурсы',           'handler' => 'runResourcesStep'],
         ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
         ['code' => 'browser',      'title' => 'Проверка в браузере',     'handler' => 'runBrowserStep'],
+        ['code' => 'pagespeed',    'title' => 'Скорость (PageSpeed)',    'handler' => 'runPageSpeedStep'],
     ];
 }
 
@@ -344,6 +346,39 @@ function runBrowserStep(array $context): array
         ],
         'findings' => $browserFindings['findings'],
     ];
+}
+
+/**
+ * Шаг `pagespeed` с настоящей сетью и БД: главная через PageSpeed Insights (mobile и desktop по очереди, до
+ * PAGESPEED_TIMEOUT_SECONDS каждая), heartbeat после каждого запроса. Итог — в `summary_json.pagespeed`, находки
+ * `speed` сохраняет `runDiagnostic()`. Ключ — из `.env`, в запросе только заголовком.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runPageSpeedStep(array $context): array
+{
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $result = runSpeedCheck(
+        $context,
+        env('PAGESPEED_API_KEY', ''),
+        static fn (string $url, array $headers): array => httpApiRequest(
+            $url,
+            null,
+            PAGESPEED_TIMEOUT_SECONDS,
+            HTTP_API_MAX_BODY_BYTES,
+            $headers
+        ),
+        static function () use ($diagnosticId): void {
+            touchDiagnosticHeartbeat($diagnosticId);
+        }
+    );
+
+    if (isset($result['facts']['pagespeed'])) {
+        updateDiagnosticSummary($diagnosticId, ['pagespeed' => $result['facts']['pagespeed']]);
+    }
+
+    return $result;
 }
 
 /**

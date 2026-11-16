@@ -1,0 +1,51 @@
+{
+    "kind": "pagespeedonline#result",
+    "id": "https://sudar.su/",
+    "lighthouseResult": {
+        "requestedUrl": "https://sudar.su/",
+        "finalDisplayedUrl": "https://sudar.su/",
+        "lighthouseVersion": "13.6.0",
+        "runWarnings": [],
+        "configSettings": {
+            "formFactor": "mobile",
+            "locale": "ru"
+        },
+        "categories": {
+            "performance": {
+                "id": "performance",
+                "score": null
+            }
+        },
+        "audits": {
+            "largest-contentful-paint": {
+                "id": "largest-contentful-paint",
+                "score": null,
+                "scoreDisplayMode": "error",
+                "errorMessage": "NO_FCP"
+            },
+            "cumulative-layout-shift": {
+                "id": "cumulative-layout-shift",
+                "score": null,
+                "scoreDisplayMode": "error",
+                "errorMessage": "NO_FCP"
+            },
+            "total-blocking-time": {
+                "id": "total-blocking-time",
+                "score": null,
+                "scoreDisplayMode": "error",
+                "errorMessage": "NO_FCP"
+            },
+            "first-contentful-paint": {
+                "id": "first-contentful-paint",
+                "score": null,
+                "scoreDisplayMode": "error",
+                "errorMessage": "NO_FCP"
+            }
+        },
+        "runtimeError": {
+            "code": "NO_FCP",
+            "message": "Страница не отрисовала контент."
+        }
+    },
+    "analysisUTCTimestamp": "2026-11-16T11:45:27.191Z"
+}

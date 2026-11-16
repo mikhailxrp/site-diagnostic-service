@@ -1,0 +1,56 @@
+{
+    "kind": "pagespeedonline#result",
+    "id": "https://sudar.su/",
+    "loadingExperience": {
+        "initial_url": "https://sudar.su/"
+    },
+    "lighthouseResult": {
+        "requestedUrl": "https://sudar.su/",
+        "finalDisplayedUrl": "https://sudar.su/",
+        "lighthouseVersion": "13.6.0",
+        "runWarnings": [
+            "Страница загружалась слишком медленно и не загрузилась в отведенное время. Результаты могут быть неполными."
+        ],
+        "configSettings": {
+            "formFactor": "mobile",
+            "locale": "ru"
+        },
+        "categories": {
+            "performance": {
+                "id": "performance",
+                "score": 0.39
+            }
+        },
+        "audits": {
+            "largest-contentful-paint": {
+                "id": "largest-contentful-paint",
+                "score": 0,
+                "displayValue": "14,3 сек.",
+                "numericValue": 14326.058084738517,
+                "numericUnit": "millisecond"
+            },
+            "cumulative-layout-shift": {
+                "id": "cumulative-layout-shift",
+                "score": 0.89,
+                "displayValue": "0,102",
+                "numericValue": 0.1020656136087485,
+                "numericUnit": "unitless"
+            },
+            "total-blocking-time": {
+                "id": "total-blocking-time",
+                "score": 0.24,
+                "displayValue": "1 080 мс",
+                "numericValue": 1076.5,
+                "numericUnit": "millisecond"
+            },
+            "first-contentful-paint": {
+                "id": "first-contentful-paint",
+                "score": 0.85,
+                "displayValue": "2,0 сек.",
+                "numericValue": 1951.00683349865,
+                "numericUnit": "millisecond"
+            }
+        }
+    },
+    "analysisUTCTimestamp": "2026-11-16T11:45:27.191Z"
+}

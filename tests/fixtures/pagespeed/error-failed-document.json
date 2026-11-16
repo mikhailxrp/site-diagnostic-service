@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": 400,
+    "message": "Lighthouse returned error: FAILED_DOCUMENT_REQUEST. Не удалось загрузить страницу. Убедитесь, что URL введен правильно и сервер отвечает на все запросы. Подробнее: net::ERR_CONNECTION_FAILED.",
+    "errors": [
+      {
+        "message": "Lighthouse returned error: FAILED_DOCUMENT_REQUEST. Не удалось загрузить страницу. Убедитесь, что URL введен правильно и сервер отвечает на все запросы. Подробнее: net::ERR_CONNECTION_FAILED.",
+        "domain": "lighthouse",
+        "reason": "lighthouseUserError"
+      }
+    ]
+  }
+}

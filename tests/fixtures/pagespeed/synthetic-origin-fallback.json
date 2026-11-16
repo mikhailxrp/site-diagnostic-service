@@ -1,0 +1,268 @@
+{
+    "kind": "pagespeedonline#result",
+    "id": "https://sudar.su/",
+    "loadingExperience": {
+        "id": "https://sudar.su",
+        "metrics": {
+            "CUMULATIVE_LAYOUT_SHIFT_SCORE": {
+                "percentile": 12,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 10,
+                        "proportion": 0.5433
+                    },
+                    {
+                        "min": 10,
+                        "max": 25,
+                        "proportion": 0.4026
+                    },
+                    {
+                        "min": 25,
+                        "proportion": 0.0542
+                    }
+                ],
+                "category": "AVERAGE"
+            },
+            "EXPERIMENTAL_TIME_TO_FIRST_BYTE": {
+                "percentile": 1055,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 800,
+                        "proportion": 0.6482
+                    },
+                    {
+                        "min": 800,
+                        "max": 1800,
+                        "proportion": 0.2376
+                    },
+                    {
+                        "min": 1800,
+                        "proportion": 0.1143
+                    }
+                ],
+                "category": "AVERAGE"
+            },
+            "FIRST_CONTENTFUL_PAINT_MS": {
+                "percentile": 1402,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 1800,
+                        "proportion": 0.8307
+                    },
+                    {
+                        "min": 1800,
+                        "max": 3000,
+                        "proportion": 0.1162
+                    },
+                    {
+                        "min": 3000,
+                        "proportion": 0.0531
+                    }
+                ],
+                "category": "FAST"
+            },
+            "INTERACTION_TO_NEXT_PAINT": {
+                "percentile": 98,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 200,
+                        "proportion": 0.9375
+                    },
+                    {
+                        "min": 200,
+                        "max": 500,
+                        "proportion": 0.0565
+                    },
+                    {
+                        "min": 500,
+                        "proportion": 0.006
+                    }
+                ],
+                "category": "FAST"
+            },
+            "LARGEST_CONTENTFUL_PAINT_MS": {
+                "percentile": 1742,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 2500,
+                        "proportion": 0.8662
+                    },
+                    {
+                        "min": 2500,
+                        "max": 4000,
+                        "proportion": 0.088
+                    },
+                    {
+                        "min": 4000,
+                        "proportion": 0.0458
+                    }
+                ],
+                "category": "FAST"
+            }
+        },
+        "overall_category": "AVERAGE",
+        "initial_url": "https://sudar.su/",
+        "origin_fallback": true
+    },
+    "originLoadingExperience": {
+        "id": "https://sudar.su",
+        "metrics": {
+            "CUMULATIVE_LAYOUT_SHIFT_SCORE": {
+                "percentile": 12,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 10,
+                        "proportion": 0.5433
+                    },
+                    {
+                        "min": 10,
+                        "max": 25,
+                        "proportion": 0.4026
+                    },
+                    {
+                        "min": 25,
+                        "proportion": 0.0542
+                    }
+                ],
+                "category": "AVERAGE"
+            },
+            "EXPERIMENTAL_TIME_TO_FIRST_BYTE": {
+                "percentile": 1055,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 800,
+                        "proportion": 0.6482
+                    },
+                    {
+                        "min": 800,
+                        "max": 1800,
+                        "proportion": 0.2376
+                    },
+                    {
+                        "min": 1800,
+                        "proportion": 0.1143
+                    }
+                ],
+                "category": "AVERAGE"
+            },
+            "FIRST_CONTENTFUL_PAINT_MS": {
+                "percentile": 1402,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 1800,
+                        "proportion": 0.8307
+                    },
+                    {
+                        "min": 1800,
+                        "max": 3000,
+                        "proportion": 0.1162
+                    },
+                    {
+                        "min": 3000,
+                        "proportion": 0.0531
+                    }
+                ],
+                "category": "FAST"
+            },
+            "INTERACTION_TO_NEXT_PAINT": {
+                "percentile": 98,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 200,
+                        "proportion": 0.9375
+                    },
+                    {
+                        "min": 200,
+                        "max": 500,
+                        "proportion": 0.0565
+                    },
+                    {
+                        "min": 500,
+                        "proportion": 0.006
+                    }
+                ],
+                "category": "FAST"
+            },
+            "LARGEST_CONTENTFUL_PAINT_MS": {
+                "percentile": 1742,
+                "distributions": [
+                    {
+                        "min": 0,
+                        "max": 2500,
+                        "proportion": 0.8662
+                    },
+                    {
+                        "min": 2500,
+                        "max": 4000,
+                        "proportion": 0.088
+                    },
+                    {
+                        "min": 4000,
+                        "proportion": 0.0458
+                    }
+                ],
+                "category": "FAST"
+            }
+        },
+        "overall_category": "AVERAGE",
+        "initial_url": "https://sudar.su/"
+    },
+    "lighthouseResult": {
+        "requestedUrl": "https://sudar.su/",
+        "finalDisplayedUrl": "https://sudar.su/",
+        "lighthouseVersion": "13.6.0",
+        "runWarnings": [
+            "Страница загружалась слишком медленно и не загрузилась в отведенное время. Результаты могут быть неполными."
+        ],
+        "configSettings": {
+            "formFactor": "mobile",
+            "locale": "ru"
+        },
+        "categories": {
+            "performance": {
+                "id": "performance",
+                "score": 0.39
+            }
+        },
+        "audits": {
+            "largest-contentful-paint": {
+                "id": "largest-contentful-paint",
+                "score": 0,
+                "displayValue": "14,3 сек.",
+                "numericValue": 14326.058084738517,
+                "numericUnit": "millisecond"
+            },
+            "cumulative-layout-shift": {
+                "id": "cumulative-layout-shift",
+                "score": 0.89,
+                "displayValue": "0,102",
+                "numericValue": 0.1020656136087485,
+                "numericUnit": "unitless"
+            },
+            "total-blocking-time": {
+                "id": "total-blocking-time",
+                "score": 0.24,
+                "displayValue": "1 080 мс",
+                "numericValue": 1076.5,
+                "numericUnit": "millisecond"
+            },
+            "first-contentful-paint": {
+                "id": "first-contentful-paint",
+                "score": 0.85,
+                "displayValue": "2,0 сек.",
+                "numericValue": 1951.00683349865,
+                "numericUnit": "millisecond"
+            }
+        }
+    },
+    "analysisUTCTimestamp": "2026-11-16T11:45:27.191Z"
+}
