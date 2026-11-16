@@ -230,6 +230,40 @@ final class HttpClientTest extends TestCase
         $this->assertSame('HEAD', $this->sent[0]['method']);
     }
 
+    public function testMaxBytesIsPassedToTransport(): void
+    {
+        httpRequest('https://shop.ru/.env', 'GET', $this->resolver(), $this->transport([
+            'https://shop.ru/.env' => ['status' => 206],
+        ]), 4096);
+
+        $this->assertSame(4096, $this->sent[0]['max_bytes']);
+    }
+
+    public function testWithoutMaxBytesRequestHasNoLimit(): void
+    {
+        httpRequest('https://shop.ru/', 'GET', $this->resolver(), $this->transport([
+            'https://shop.ru/' => ['status' => 200],
+        ]));
+
+        $this->assertArrayNotHasKey('max_bytes', $this->sent[0]);
+    }
+
+    public function testRequestHeadersWithLimitAskForRangeWithoutCompression(): void
+    {
+        $headers = buildRequestHeaders(4096);
+
+        $this->assertContains('Range: bytes=0-4095', $headers);
+        $this->assertContains('Accept-Encoding: identity', $headers);
+    }
+
+    public function testRequestHeadersWithoutLimitHaveNoRange(): void
+    {
+        foreach (buildRequestHeaders(null) as $header) {
+            $this->assertStringStartsNotWith('Range:', $header);
+            $this->assertStringStartsNotWith('Accept-Encoding:', $header);
+        }
+    }
+
     public function testLimitBodyChunkStopsAtLimit(): void
     {
         $this->assertSame(['chunk' => 'cd', 'truncated' => false], limitBodyChunk(2, 'cd', 4));

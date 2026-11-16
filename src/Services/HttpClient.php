@@ -35,12 +35,20 @@ const NANOSECONDS_IN_MILLISECOND = 1_000_000;
  *
  * @param callable(string $host): list<string>|null $resolver  DNS; null — настоящий (`resolveHostIps`)
  * @param callable(array $request): array|null       $transport один запрос без редиректов; null — curl
+ * @param int|null                                    $maxBytes  предел тела ответа: читается только начало файла
+ *                                                               (`Range`, без сжатия, обрыв загрузки); null —
+ *                                                               HTTP_MAX_BODY_BYTES без `Range`
  * @return array{final_url: string, status: ?int, headers: array<string, list<string>>, body: string,
  *               truncated: bool, redirects: list<array{url: string, status: int, location: string}>,
  *               time_ms: int, error: ?string}
  */
-function httpRequest(string $url, string $method = 'GET', ?callable $resolver = null, ?callable $transport = null): array
-{
+function httpRequest(
+    string $url,
+    string $method = 'GET',
+    ?callable $resolver = null,
+    ?callable $transport = null,
+    ?int $maxBytes = null
+): array {
     $resolver ??= 'resolveHostIps';
     $transport ??= 'sendCurlRequest';
     $method = strtoupper($method);
@@ -63,13 +71,18 @@ function httpRequest(string $url, string $method = 'GET', ?callable $resolver = 
             return $finish([], $target['error']);
         }
 
-        $response = $transport([
+        $request = [
             'url'    => $currentUrl,
             'method' => $method,
             'host'   => $target['host'],
             'port'   => $target['port'],
             'ip'     => $target['ip'],
-        ]);
+        ];
+        if ($maxBytes !== null) {
+            $request['max_bytes'] = max(1, $maxBytes);
+        }
+
+        $response = $transport($request);
 
         if (($response['error'] ?? null) !== null) {
             return $finish($response, (string) $response['error']);
@@ -301,9 +314,30 @@ function addHeaderLine(array $headers, string $line): array
 }
 
 /**
+ * Заголовки запроса. С пределом размера — `Range` на первые `$maxBytes` байт и `Accept-Encoding: identity`:
+ * Range режет сжатый поток, а не файл, поэтому сжатие в этом режиме не запрашивается.
+ *
+ * @return list<string>
+ */
+function buildRequestHeaders(?int $maxBytes): array
+{
+    $headers = [
+        'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language: ' . HTTP_ACCEPT_LANGUAGE,
+    ];
+
+    if ($maxBytes !== null) {
+        $headers[] = 'Range: bytes=0-' . (max(1, $maxBytes) - 1);
+        $headers[] = 'Accept-Encoding: identity';
+    }
+
+    return $headers;
+}
+
+/**
  * Один запрос через curl без авто-редиректов, на заранее проверенный IP.
  *
- * @param array{url: string, method: string, host: string, port: int, ip: string} $request
+ * @param array{url: string, method: string, host: string, port: int, ip: string, max_bytes?: int} $request
  * @return array{status: ?int, headers: array<string, list<string>>, body: string, truncated: bool, error: ?string}
  */
 function sendCurlRequest(array $request): array
@@ -316,6 +350,8 @@ function sendCurlRequest(array $request): array
     $headers = [];
     $body = '';
     $truncated = false;
+    $maxBytes = isset($request['max_bytes']) ? (int) $request['max_bytes'] : null;
+    $bodyLimit = $maxBytes ?? HTTP_MAX_BODY_BYTES;
 
     $options = [
         CURLOPT_URL            => $request['url'],
@@ -324,11 +360,7 @@ function sendCurlRequest(array $request): array
         CURLOPT_CONNECTTIMEOUT => HTTP_CONNECT_TIMEOUT_SECONDS,
         CURLOPT_TIMEOUT        => HTTP_TIMEOUT_SECONDS,
         CURLOPT_USERAGENT      => HTTP_USER_AGENT,
-        CURLOPT_HTTPHEADER     => [
-            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language: ' . HTTP_ACCEPT_LANGUAGE,
-        ],
-        CURLOPT_ENCODING       => '', // gzip/br распаковываются; предел размера считается по распакованному
+        CURLOPT_HTTPHEADER     => buildRequestHeaders($maxBytes),
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_NOBODY         => $request['method'] === 'HEAD',
@@ -337,14 +369,21 @@ function sendCurlRequest(array $request): array
 
             return strlen($line);
         },
-        CURLOPT_WRITEFUNCTION  => static function ($curl, string $chunk) use (&$body, &$truncated): int {
-            $limited = limitBodyChunk(strlen($body), $chunk, HTTP_MAX_BODY_BYTES);
+        CURLOPT_WRITEFUNCTION  => static function ($curl, string $chunk) use (&$body, &$truncated, $bodyLimit): int {
+            $limited = limitBodyChunk(strlen($body), $chunk, $bodyLimit);
             $body .= $limited['chunk'];
             $truncated = $limited['truncated'];
 
             return $truncated ? 0 : strlen($chunk); // 0 — curl обрывает загрузку
         },
     ];
+
+    if ($maxBytes === null) {
+        $options[CURLOPT_ENCODING] = ''; // gzip/br распаковываются; предел размера считается по распакованному
+    } else {
+        // Обрыв потока HTTP/2 по пределу curl 8.7 дожидается до тайм-аута (30 с на запрос); HTTP/1.1 рвёт сразу
+        $options[CURLOPT_HTTP_VERSION] = CURL_HTTP_VERSION_1_1;
+    }
 
     if (filter_var($request['host'], FILTER_VALIDATE_IP) === false) {
         $ip = filter_var($request['ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false

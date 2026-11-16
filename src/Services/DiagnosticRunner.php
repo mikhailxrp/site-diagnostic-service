@@ -26,6 +26,7 @@ require_once ROOT_PATH . '/src/Services/Checks/PhpErrorCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/MixedContentCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/BotProtectionCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SeoCheck.php';
+require_once ROOT_PATH . '/src/Services/Checks/ExposedFilesCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/OutdatedCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/VulnerabilityCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
@@ -65,6 +66,7 @@ function getDiagnosticSteps(): array
         ['code' => 'crawl',        'title' => 'Поиск страниц магазина', 'handler' => 'runCrawlStep'],
         ['code' => 'resources',    'title' => 'Битые ресурсы',           'handler' => 'runResourcesStep'],
         ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
+        ['code' => 'exposed_files', 'title' => 'Служебные файлы',        'handler' => 'runExposedFilesStep'],
         ['code' => 'browser',      'title' => 'Проверка в браузере',     'handler' => 'runBrowserStep'],
         ['code' => 'pagespeed',    'title' => 'Скорость (PageSpeed)',    'handler' => 'runPageSpeedStep'],
         ['code' => 'ai_problem',   'title' => 'Разбор проблемы (ИИ)',    'handler' => 'runAiProblemStep'],
@@ -272,6 +274,24 @@ function runSeoStep(array $context): array
     }
 
     return $result;
+}
+
+/**
+ * Шаг `exposed_files` с настоящей сетью: каждый путь читается не больше EXPOSED_FILE_MAX_BYTES, heartbeat — после
+ * каждого запроса. Находки сохраняет `runDiagnostic()`.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runExposedFilesStep(array $context): array
+{
+    $diagnosticId = (int) $context['diagnostic']['id'];
+
+    return runExposedFilesCheck(
+        $context,
+        static fn (string $url, int $maxBytes): array => httpRequest($url, 'GET', null, null, $maxBytes),
+        static fn () => touchDiagnosticHeartbeat($diagnosticId)
+    );
 }
 
 /**
