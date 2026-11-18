@@ -725,6 +725,42 @@ final class ReportBuilderTest extends TestCase
         $this->assertNull($groups[3]['url']);
     }
 
+    public function testCheckoutScenarioPagesAreNotDuplicatedInPagesAndGalleries(): void
+    {
+        $pages = [
+            ['id' => 1, 'url' => self::HOME_URL, 'page_type' => 'home', 'found_by' => 'start', 'http_code' => 200, 'blocked' => 0],
+            ['id' => 3, 'url' => 'https://shop.ru/cart/', 'page_type' => 'cart', 'found_by' => 'cms_pattern', 'http_code' => 200,
+                'blocked' => 0],
+            // Страницы сценария заказа: корзина по тому же адресу и оформление, которого обход не нашёл
+            ['id' => 11, 'url' => 'https://shop.ru/cart/', 'page_type' => 'cart', 'found_by' => 'cms_pattern', 'http_code' => null,
+                'blocked' => 0],
+            ['id' => 12, 'url' => 'https://shop.ru/order/', 'page_type' => 'checkout', 'found_by' => 'link_heuristic',
+                'http_code' => null, 'blocked' => 0],
+            ['id' => 13, 'url' => 'https://shop.ru/order/step2/', 'page_type' => 'checkout', 'found_by' => 'link_heuristic',
+                'http_code' => null, 'blocked' => 0],
+        ];
+        $screenshots = [
+            ['id' => 31, 'page_id' => 3, 'viewport_width' => 360],
+            ['id' => 32, 'page_id' => 3, 'viewport_width' => 1366],
+            ['id' => 41, 'page_id' => 11, 'viewport_width' => 1366],
+            ['id' => 42, 'page_id' => 12, 'viewport_width' => 1366],
+        ];
+        $findings = [$this->finding('critical', 'Нет формы', ['category' => 'checkout', 'page_id' => 12])];
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['checkout' => ['page_ids' => [11, 12, 13]]]);
+
+        $report = buildReport($diagnostic, $findings, [], $pages, $screenshots);
+
+        $this->assertSame(['home', 'cart'], array_column($report['pages'], 'type'), 'оформление сценария — не «найдено обходом»');
+        $this->assertSame([360, 1366], array_column($report['pages'][1]['screenshots'], 'width'), 'без второго снимка 1366');
+        $groups = array_column($report['findingPageGroups'], null, 'url');
+        $this->assertSame(['Нет формы'], array_column($groups['https://shop.ru/order/']['items'], 'title'));
+        $this->assertArrayNotHasKey('https://shop.ru/order/step2/', $groups, 'страница сценария без находок — не группа');
+
+        $old = buildReport($this->diagnostic(), $findings, [], $pages, $screenshots);
+        $this->assertCount(3, array_column($old['pages'], 'type'), 'без summary_json.checkout — как раньше');
+    }
+
     public function testNoPagesGivesOnlySiteWideGroup(): void
     {
         $groups = buildReport($this->diagnostic(), [$this->finding('high', 'Нет ответа')], [], [])['findingPageGroups'];

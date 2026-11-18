@@ -31,6 +31,8 @@ require_once ROOT_PATH . '/src/Services/Checks/OutdatedCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/VulnerabilityCheck.php';
 require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
 require_once ROOT_PATH . '/src/Services/ShopCrawler.php';
+require_once ROOT_PATH . '/src/Services/CheckoutScenario.php';
+require_once ROOT_PATH . '/src/Services/Checks/CheckoutCheck.php';
 require_once ROOT_PATH . '/src/Services/AiClient.php';
 require_once ROOT_PATH . '/src/Services/Ai/ProblemAnalysis.php';
 require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
@@ -68,6 +70,7 @@ function getDiagnosticSteps(): array
         ['code' => 'seo',          'title' => 'Базовое SEO',             'handler' => 'runSeoStep'],
         ['code' => 'exposed_files', 'title' => 'Служебные файлы',        'handler' => 'runExposedFilesStep'],
         ['code' => 'browser',      'title' => 'Проверка в браузере',     'handler' => 'runBrowserStep'],
+        ['code' => 'checkout',     'title' => 'Сценарий заказа',         'handler' => 'runCheckoutStep'],
         ['code' => 'pagespeed',    'title' => 'Скорость (PageSpeed)',    'handler' => 'runPageSpeedStep'],
         ['code' => 'ai_problem',   'title' => 'Разбор проблемы (ИИ)',    'handler' => 'runAiProblemStep'],
         ['code' => 'ai_visual',    'title' => 'Проверка вёрстки (ИИ)',   'handler' => 'runAiVisualStep'],
@@ -393,6 +396,121 @@ function runBrowserStep(array $context): array
 }
 
 /**
+ * Шаг `checkout` с настоящим Chrome и БД: сценарий «товар → в корзину → корзина → форма оформления»
+ * (`CheckoutScenario.php`), заказ не отправляется. Отдельный запуск Chrome; браузер закрывается и профиль удаляется
+ * в любом случае; heartbeat — после каждой загрузки. Страницы сценария — новые строки `checked_pages`, снимки 1366 —
+ * `screenshots`, итог — `summary_json.checkout` (по `page_ids` страницы сценария не попадают в «Проверенные
+ * страницы» отчёта и в ИИ). Нет товара / Chrome → `skipped` с причиной.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runCheckoutStep(array $context): array
+{
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $target = selectCheckoutTarget($context);
+    if ($target['skip'] !== null) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => buildCheckoutSkipMessage($target['skip'], $target['detail'])];
+    }
+    if (!isBrowserLibraryAvailable()) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => BROWSER_NO_LIBRARY_MESSAGE];
+    }
+
+    $shopPatterns = loadShopPatterns();
+    $rules = buildCheckoutRules(
+        loadCheckoutSelectors(),
+        $shopPatterns,
+        detectCheckoutPlatforms($context, array_keys($shopPatterns['platforms']))
+    );
+
+    try {
+        $session = launchBrowser(resolveChromePath(getSetting(CHROME_PATH_SETTING)), $diagnosticId, BROWSER_STARTUP_TIMEOUT_SECONDS);
+    } catch (RuntimeException $e) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => BROWSER_UNAVAILABLE_PREFIX . $e->getMessage()];
+    }
+
+    try {
+        $scenario = runCheckoutScenario(
+            $session['browser'],
+            $target,
+            $rules,
+            (string) $context['diagnostic']['host'],
+            static fn () => touchDiagnosticHeartbeat($diagnosticId)
+        );
+    } finally {
+        closeBrowser($session);
+    }
+
+    $scenario['steps'] = storeCheckoutSteps($scenario['steps'], $diagnosticId);
+    $home = $context['facts']['availability']['home'] ?? [];
+    $homeUrl = (string) (($home['final_url'] ?? '') !== '' ? $home['final_url'] : $context['diagnostic']['url']);
+    $result = buildCheckoutResult($scenario, $homeUrl);
+    updateDiagnosticSummary($diagnosticId, ['checkout' => $result['summary']]);
+
+    if ($scenario['requests']['checkout_sent'] > 0 || $scenario['requests']['errors'] > 0) {
+        logWarning('Сценарий заказа: изменяющий запрос на оформлении не заблокирован или ошибка перехвата', [
+            'diagnostic_id' => $diagnosticId,
+            'requests'      => $scenario['requests'],
+        ]);
+    }
+
+    return [
+        'status'   => $result['status'],
+        'message'  => $result['message'],
+        'facts'    => ['summary' => $result['summary'], 'requests' => $scenario['requests']],
+        'findings' => $result['findings'],
+    ];
+}
+
+/**
+ * Страницы шагов сценария, которые открывались в браузере, → `checked_pages`, их снимки → файлы и `screenshots`.
+ * В шагах остаются `page_id` и `screenshot_id`, двоичные данные убираются.
+ *
+ * @param list<array<string, mixed>> $steps
+ * @return list<array<string, mixed>>
+ */
+function storeCheckoutSteps(array $steps, int $diagnosticId): array
+{
+    foreach ($steps as $index => $step) {
+        $step['page_id'] = null;
+        if ($step['opened'] && is_string($step['url']) && $step['url'] !== '') {
+            $step['page_id'] = insertCheckedPage($diagnosticId, [
+                'url'         => $step['url'],
+                'page_type'   => $step['page_type'],
+                'found_by'    => $step['found_by'] ?? CRAWL_FOUND_BY_LINKS,
+                'http_code'   => null,
+                'response_ms' => $step['dom_ms'],
+                'blocked'     => false,
+            ]);
+        }
+
+        $stored = storeLoadScreenshot(
+            ['page_id' => $step['page_id'], 'width' => CHECKOUT_VIEWPORT_WIDTH, 'screenshot' => $step['screenshot'] ?? null],
+            $diagnosticId
+        );
+        unset($step['screenshot']);
+        $step['screenshot_id'] = $stored['screenshot_id'] ?? null;
+        if (isset($stored['screenshot_error'])) {
+            $step['screenshot_error'] = $stored['screenshot_error'];
+        }
+        $steps[$index] = $step;
+    }
+
+    return $steps;
+}
+
+/**
+ * Проверенные страницы диагностики для ИИ: без страниц сценария заказа (они описаны в `summary_json.checkout`).
+ *
+ * @param array<string, mixed>|null $summary разобранный `summary_json`
+ * @return list<array<string, mixed>>
+ */
+function getCheckedPagesForAi(int $diagnosticId, ?array $summary): array
+{
+    return excludeCheckoutPages(getCheckedPagesByDiagnostic($diagnosticId), $summary['checkout'] ?? null);
+}
+
+/**
  * Шаг `pagespeed` с настоящей сетью и БД: главная через PageSpeed Insights (mobile и desktop по очереди, до
  * PAGESPEED_TIMEOUT_SECONDS каждая), heartbeat после каждого запроса. Итог — в `summary_json.pagespeed`, находки
  * `speed` сохраняет `runDiagnostic()`. Ключ — из `.env`, в запросе только заголовком.
@@ -451,7 +569,7 @@ function runAiProblemStep(array $context): array
         [
             'findings' => getFindingsByDiagnostic($diagnosticId),
             'stack'    => getStackItemsByDiagnostic($diagnosticId),
-            'pages'    => getCheckedPagesByDiagnostic($diagnosticId),
+            'pages'    => getCheckedPagesForAi($diagnosticId, is_array($summary) ? $summary : null),
             'summary'  => is_array($summary) ? $summary : null,
         ],
         resolveModelSetting(getSetting(AI_PROBLEM_MODEL_SETTING)),
@@ -487,7 +605,13 @@ function runAiVisualStep(array $context): array
     }
 
     $diagnosticId = (int) $context['diagnostic']['id'];
-    $selection = selectVisualPages(getCheckedPagesByDiagnostic($diagnosticId), getScreenshotsByDiagnostic($diagnosticId));
+    $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    $summary = is_string($diagnostic['summary_json'] ?? null) ? json_decode($diagnostic['summary_json'], true) : null;
+    // Снимки сценария заказа не отправляются: картинки — самая дорогая часть ИИ, страницы уже сняты шагом `browser`
+    $selection = selectVisualPages(
+        getCheckedPagesForAi($diagnosticId, is_array($summary) ? $summary : null),
+        getScreenshotsByDiagnostic($diagnosticId)
+    );
     if ($selection['pages'] === []) {
         return ['status' => STEP_STATUS_SKIPPED, 'message' => AI_VISUAL_NO_SCREENSHOTS];
     }
@@ -543,7 +667,7 @@ function runAiSummaryStep(array $context): array
         [
             'findings' => getFindingsByDiagnostic($diagnosticId),
             'stack'    => getStackItemsByDiagnostic($diagnosticId),
-            'pages'    => getCheckedPagesByDiagnostic($diagnosticId),
+            'pages'    => getCheckedPagesForAi($diagnosticId, is_array($summary) ? $summary : null),
             'summary'  => is_array($summary) ? $summary : null,
             'steps'    => $diagnostic['steps'] ?? [],
         ],

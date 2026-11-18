@@ -1,89 +1,140 @@
 # Current Task
 
 ## Фаза
-Phase 5 — Для клиента и углублённые проверки (таск 1 — Открытые служебные файлы) — ✅ Завершён
+Phase 5 — Для клиента и углублённые проверки (таск 2 — Сценарий корзины: проход в браузере) — ✅ Завершён
 
 ## Задача
-Шаг `exposed_files` (после `seo`) проверяет фиксированный список служебных путей и даёт находку `exposed_file`,
-только если по содержимому видно, что это настоящий файл, а не заглушка или «мягкий 404».
+Шаг `checkout` (после `browser`) в Chrome проходит «товар → в корзину → корзина → форма оформления» на ширине 1366,
+на каждом шаге делает скриншот и собирает ошибки консоли; заказ не отправляется ни при каком исходе.
 
 ## Образец
-Без UI. Находки выводит существующий компонент `src/Views/components/finding.php` в разделе «Открытый файл»
-(категория `exposed_file` уже есть в `FindingFactory.php` и `ReportBuilder.php`). Правки интерфейса не нужны.
+Без UI. Карточка «Сценарий заказа» — таск 3. Находки `checkout` пока выводит существующий
+`src/Views/components/finding.php` (категория уже есть в `FindingFactory.php` и `ReportBuilder.php`).
 
 ## Как это работает
-1. **Нет данных главной** (шаг `availability` не дал ответа) → `skipped` с причиной.
-2. **Эталон «мягкого 404»**: запрашивается случайный несуществующий адрес (`/sd-<16 hex>.txt`).
-   - Если эталон — заглушка защиты от ботов (`detectBotProtection()`), то `skipped`: «сайт закрыт защитой
-     от ботов, служебные файлы не проверить».
-   - Если эталон отвечает 200, запоминается sha1 его тела.
-3. **Каждый путь из `data/exposed-files.php`** — GET с пределом `EXPOSED_FILE_MAX_BYTES`
-   (`Range: bytes=0-N`, обрыв загрузки в curl, без сжатия, потому что Range режет сжатый поток).
-   Файл считается открытым, только если выполнены все условия:
-   - статус 200 или 206;
-   - адрес после редиректов не сменил путь;
-   - тело не совпадает с эталоном;
-   - сработал признак содержимого пути.
-4. **Признаки** (имя признака уходит в `evidence`):
-   - `git_head`: строка начинается с `ref: refs/` или 40 hex;
-   - `git_config`: `[core]`;
-   - `env`: строки `KEY=` в начале строки, тело не HTML;
-   - `php_source`: начинается с `<?php`, есть `DB_`/`password` (бэкапы конфигов);
-   - `sql_dump`: `-- MySQL dump`, `-- phpMyAdmin SQL Dump`, `CREATE TABLE`, `INSERT INTO`;
-   - `archive`: magic bytes zip `PK\x03\x04`, gzip `\x1f\x8b`, rar `Rar!`, 7z;
-   - `phpinfo`: `<title>phpinfo()</title>` или `PHP Version` + `phpinfo`;
-   - `adminer`: `Adminer` + форма входа;
-   - `php_log`: `PHP Fatal error` / `PHP Warning` / `PHP Notice` / `[error]`.
-5. **Серьёзность**:
-   - `critical`: `.git`, `.env`, бэкапы конфигов, дампы, архивы;
-   - `high`: phpinfo, adminer;
-   - `medium`: логи.
-6. **Секреты никуда не пишутся.** В `evidence` попадают только `status`, `bytes_read`, `content_type`
-   и `signature` (имя признака). Тело ответа не сохраняется ни в находке, ни в `details`, ни в логе.
-   `details` — шаблонный текст «чем опасно и что сделать».
-7. **Heartbeat** — после каждого запроса (колбэк, как у `resources`).
-8. **Сообщение шага**: «Проверено N путей, открыто M».
+1. **Пропуск (`skipped`)** с причиной:
+   - нет библиотеки или Chrome — те же тексты, что у `browser` (`BROWSER_NO_LIBRARY_MESSAGE`,
+     `BROWSER_UNAVAILABLE_PREFIX`);
+   - товар не найден: нет `facts.crawl.pages.product` и нет `product_url`;
+   - страница товара за защитой от ботов (`bot_protection` из фактов `crawl` или проверка открытой страницы);
+   - товара нет в наличии, у товара обязательные варианты (`variations_form`, `select[required]` и т. п.).
+2. **Адреса.**
+   - Товар: `facts.crawl.pages.product` (туда уже попадает `product_url` с `found_by = manual`). Если шаг `crawl`
+     не дал фактов — `product_url`.
+   - Корзина и оформление, по порядку: адрес из фактов `crawl` → ссылка на текущей странице (`cart_link*` /
+     `checkout_link*` из `data/shop-patterns.php`) → типовые пути платформы → `generic`.
+   - Платформа — `facts.crawl.platforms` (ключи `data/signatures.php`).
+3. **Браузер.** Отдельный запуск Chrome (`launchBrowser()`), одна вкладка на весь сценарий (сессия и корзина
+   сохраняются), закрытие и удаление профиля в `finally` (`closeBrowser()`). Используются готовые
+   `navigateBrowserPage()`, `captureBrowserScreenshots()`, `createBrowserEventState()` / `applyBrowserEvent()`;
+   `BrowserService.php` не меняется. Диалоги `alert` / `confirm` (`Page.javascriptDialogOpening`) закрываются
+   отменой, иначе вкладка зависнет до тайм-аута.
+4. **Шаги сценария** (у каждого: url, статус, скриншот 1366, ошибки консоли, причина):
+   - `product` — открыть товар, проверить «нет в наличии» и обязательные варианты (→ `skipped`);
+   - `add_to_cart` — найти кнопку: сначала селекторы платформы, потом общие тексты («В корзину», «Купить»).
+     **Никогда не нажимаются** кнопки с текстами «в 1 клик», «быстрый заказ», «оформить», «заказать», «подтвердить»
+     (стоп-лист в `data/checkout-selectors.php`). Нажатие — `element.click()` через `Runtime.evaluate`.
+     Сигнал успеха (ждём не дольше `CHECKOUT_ADD_WAIT_MS`): изменился счётчик / мини-корзина, ушёл запрос
+     добавления с ответом 2xx, или страница перешла в корзину;
+   - `cart` — открыть корзину, проверить, что она не пуста (нет признака «корзина пуста», есть строка товара);
+   - `checkout` — открыть оформление **переходом по адресу**, не нажатием кнопки; проверить, что есть форма с
+     полями (имя / телефон / email). Поля не заполняются, ничего не нажимается.
+5. **Защита от отправки заказа** — перехват `Fetch.enable` на весь сценарий (`requestStage: Request`):
+   - на всех шагах POST / PUT / PATCH / DELETE на адреса, похожие на заказ (`order`, `checkout`, `oformlenie`,
+     `zakaz`, `sale.order.ajax` …, список в `data/checkout-selectors.php`), блокируются (`Fetch.failRequest`,
+     `BlockedByClient`);
+   - с начала шага `checkout` блокируются **все** POST / PUT / PATCH / DELETE;
+   - если нажатие «В корзину» перевело страницу на адрес оформления — сценарий сразу переходит в режим `checkout`;
+   - остальные запросы — `Fetch.continueRequest`; ошибка обработчика → запрос блокируется (безопасный отказ),
+     в конце сценария `Fetch.disable`;
+   - лог перехвата: метод, адрес без query, шаг, `blocked` / `passed`. В лог приложения и в факты тела запросов не
+     попадают.
+6. **Находки** — `makeFinding('checkout', …)`, ключ fingerprint = код упавшего шага (стабилен между запусками),
+   `location` — адрес шага, `page_id` — страница сценария, в `evidence`: `step`, `reason`, `screenshot_id`,
+   число ошибок консоли. Свой случай — своя находка:
+   - кнопка «В корзину» не найдена;
+   - товар не добавился (нет сигнала после нажатия и корзина пуста);
+   - корзина пуста (сигнал был, а корзина пуста);
+   - форма оформления не открылась (адрес не найден / не открылся / нет формы с полями).
+7. **Ошибки консоли** — только факты (число и первые `CHECKOUT_CONSOLE_SAMPLE` сообщений, обрезанных до
+   `CHECKOUT_CONSOLE_MESSAGE_MAX_CHARS`). Отдельных `js_error` / `failed_request` нет: их даёт шаг `browser`.
+8. **Хранение.**
+   - Страницы сценария — новые строки `checked_pages` (`page_type` `product` / `cart` / `checkout`,
+     `found_by` — `manual` для `product_url`, иначе `link_heuristic`): у каждой свой `page_id`, поэтому файл
+     скриншота `<diag>/<page>-1366.jpg` не перезаписывает снимок шага `browser`.
+   - Скриншоты 1366 — в `screenshots` через `buildScreenshotFilePath()` / `saveScreenshotFiles()` /
+     `insertScreenshot()`.
+   - Итог — `summary_json.checkout`, **компактно** (не длиннее `FACT_SECTION_MAX_CHARS`, он уходит в пакет фактов
+     ИИ через `packSummaryFacts()`): `steps` [{code, status, url, page_id, screenshot_id, console_errors,
+     console_sample, reason}], `reached` (код последнего пройденного шага), `posts` {checkout_sent, blocked},
+     `page_ids` (все страницы сценария).
+9. **Страницы сценария не тратят деньги и не дублируются** (по `summary_json.checkout.page_ids`, чистая функция
+   `excludeCheckoutPages()` в `CheckoutCheck.php`; у старых диагностик ничего не меняется):
+   - `ai_visual` — не отправляются (картинки — самая дорогая часть ИИ);
+   - `ai_problem`, `ai_summary` — не входят в `pages` пакета фактов (сценарий уже описан в
+     `summary_json.checkout`);
+   - отчёт — не попадают в «Проверенные страницы» и в их галереи (снимки там собираются по адресу). Находки
+     по страницам (`buildReportFindingsByPage`) по-прежнему видят все страницы — находка `checkout` не теряется.
+10. **Тайм-ауты** — именованные константы: `CHECKOUT_STEP_TIMEOUT_MS` (загрузка шага), `CHECKOUT_ADD_WAIT_MS`
+    (сигнал после нажатия). Сумма по всем шагам заметно меньше `HEARTBEAT_STALE_SECONDS`; heartbeat — после
+    каждого шага.
+11. **Сообщение шага**: «Дошёл до формы оформления; POST на оформлении: ушло 0, заблокировано 2» /
+    «Остановился на шаге „Корзина“: корзина пуста» / причина пропуска.
 
 ## Scope — что трогаем
-- [ ] `data/exposed-files.php` — создать: список `path → signature, severity, title`
-      (`.git/HEAD`, `.git/config`, `.env`, `.env.bak`, `wp-config.php.bak`, `wp-config.php~`, `wp-config.php.old`,
-      `configuration.php.bak`, `config.php.bak`, `backup.sql`, `dump.sql`, `db.sql`, `database.sql`,
-      `backup.zip`, `backup.tar.gz`, `site.zip`, `phpinfo.php`, `info.php`, `adminer.php`, `error_log`,
-      `wp-content/debug.log`) и описание признаков
-- [ ] `src/Services/Checks/ExposedFilesCheck.php` — создать: `runExposedFilesCheck($context, $request, $onRequest,
-      ?$rules, ?$botRules)` без БД и сети; эталон, сравнение, признаки, находки через `makeFinding('exposed_file', …)`
-- [ ] `src/Services/HttpClient.php` — изменить: необязательный предел размера ответа в `httpRequest()`, который
-      передаётся в `sendCurlRequest()`. При пределе: заголовок `Range`, `Accept-Encoding: identity`, обрыв по
-      `limitBodyChunk()`. Без параметра поведение прежнее.
-- [ ] `src/Services/DiagnosticRunner.php` — изменить: `require_once` проверки, шаг
-      `['code' => 'exposed_files', 'title' => 'Служебные файлы', …]` после `seo`, обработчик `runExposedFilesStep()`
-      (реальная сеть + `touchDiagnosticHeartbeat`)
-- [ ] `tests/Unit/ExposedFilesCheckTest.php` — создать
-- [ ] `tests/Unit/HttpClientTest.php` — изменить: предел передаётся в transport, без него поведение прежнее
-- [ ] `tests/Unit/DiagnosticRunnerTest.php` — изменить: `testStepsOrder` с `exposed_files` после `seo`
+- [x] `data/checkout-selectors.php` — создать: по платформам — кнопка «В корзину», счётчик / мини-корзина,
+      «корзина пуста», строка товара в корзине, форма оформления, «нет в наличии», обязательные варианты;
+      `generic` — общие тексты и селекторы; стоп-лист текстов кнопок; шаблоны адресов «заказа» для блокировки POST
+- [x] `src/Services/CheckoutScenario.php` — создать: проход шагов в Chrome, перехват Fetch, диалоги, скриншоты,
+      лог перехвата. Чистые функции отдельно от Chrome: решение о блокировке запроса, выбор селекторов по платформе,
+      порядок адресов корзины / оформления, проверка текста кнопки по стоп-листу, разбор результата DOM-проверки
+- [x] `src/Services/Checks/CheckoutCheck.php` — создать: результат сценария → находки / `skipped` / сообщение шага;
+      `buildCheckoutSummary()` (компактный `summary_json.checkout`), `excludeCheckoutPages()`. Без БД и браузера
+- [x] `src/Services/DiagnosticRunner.php` — изменить: `require_once`; шаг
+      `['code' => 'checkout', 'title' => 'Сценарий заказа', …]` после `browser`; `runCheckoutStep()` (страницы,
+      скриншоты, `summary_json.checkout`, heartbeat); в `runAiProblemStep`, `runAiVisualStep`, `runAiSummaryStep`
+      страницы пропускаются через `excludeCheckoutPages()`
+- [x] `src/Services/ReportBuilder.php` — изменить минимально: в `buildReportPages()` и `buildPageScreenshotMap()`
+      передаются страницы без страниц сценария
+- [x] `tests/Unit/CheckoutCheckTest.php` — создать
+- [x] `tests/Unit/CheckoutScenarioTest.php` — создать (только чистые функции)
+- [x] `tests/Unit/DiagnosticRunnerTest.php` — изменить: `testStepsOrder` с `checkout` после `browser`
+- [x] `tests/Unit/ReportBuilderTest.php` — изменить: страницы сценария не в «Проверенных страницах» и галереях,
+      находка на странице сценария видна; без `summary_json.checkout` всё как раньше
 
 ## Out of scope — не трогаем
-- Отдельная карточка или таблица «Служебные файлы» в отчёте, `summary_json` для этого шага
-- Пути, зависящие от CMS или домена (`<домен>.zip` и т. п.): только фиксированный список
-- Отдельный тайм-аут для шага: используется общий `HTTP_TIMEOUT_SECONDS`
-- Листинг каталогов, перебор `.git/objects`, скачивание файлов целиком
-- `ReportBuilder.php`, `FactPacker.php`, Views: находки идут по общему пути
-- Таски 2–7 фазы 5 (сценарий корзины, клиентский отчёт, PDF, сравнение)
-- Рефакторинг `SeoCheck` и других проверок
+- Карточка «Сценарий заказа» в отчёте, `checkout-steps.php`, `diagnostic.php`, `FactPacker.php` — таск 3
+- `BrowserService.php`, `VisualAnalysis.php`, `ShopCrawler.php`, `data/shop-patterns.php`
+- Заполнение полей формы, выбор доставки / оплаты, нажатие любых кнопок оформления
+- Мобильные ширины в сценарии (только 1366)
+- Находки `js_error` / `failed_request` из сценария
+- Миграции БД, новые значения ENUM
+- Объединение запусков Chrome шагов `browser` и `checkout` (рефакторинг)
+- Таски 3–7 фазы 5
 
 ## Definition of Done
-- [ ] Сайт, который на любой адрес отдаёт 200 с главной, не даёт ни одной находки (тест)
-- [ ] Заглушка с правильным путём, но без признака (HTML-страница на `/.env`), не даёт находки (тест)
-- [ ] Открытый `.env` и `.git/HEAD` дают находки `critical` (тест)
-- [ ] В `evidence`, `details`, отчёте и `storage/logs/app.log` нет значений из файла: только факт доступности
-      и имя признака (тест на `evidence` + ручная проверка лога)
-- [ ] В transport уходит предел `EXPOSED_FILE_MAX_BYTES`, тело в результате не длиннее его (тест)
-- [ ] Сайт за защитой от ботов → шаг `skipped` с причиной, находок нет (тест)
-- [ ] Нет главной → `skipped` (тест)
-- [ ] Шаг виден в прогрессе после «Базовое SEO», старые диагностики без шага открываются без ошибок
-- [ ] Проверено вживую на sudar.su, cleansan.ru, citilink.ru: ложных находок нет, время шага в сообщении разумное
-- [ ] `composer test` проходит
-- [ ] Проверить `.docs/dod-global.md`
+- [x] На реальном магазине (sudar.su или cleansan.ru) сценарий доходит до формы оформления; по логу перехвата на
+      странице оформления не ушло ни одного POST (`posts.checkout_sent = 0`)
+- [x] Каждый из случаев «кнопка не найдена», «товар не добавился», «корзина пуста», «форма не открылась» даёт свою
+      находку `checkout` со `screenshot_id` (тест)
+- [x] «Нет в наличии», обязательные варианты, «товар не найден», защита от ботов → `skipped` с причиной, находок
+      нет (тест)
+- [x] Без Chrome / без библиотеки → `skipped` с тем же текстом, что у `browser`
+- [x] Блокировка (тест): на шаге `checkout` любой POST блокируется, GET проходит; до оформления POST добавления в
+      корзину проходит, а POST на адрес «заказа» блокируется; кнопка «Купить в 1 клик» не выбирается
+- [x] Страницы сценария не уходят в `ai_visual` и в `pages` пакета фактов `ai_problem` / `ai_summary`; в отчёте нет
+      дублей снимков 1366 в «Проверенных страницах» (тест + проверка на живой диагностике)
+- [x] `summary_json.checkout` не длиннее `FACT_SECTION_MAX_CHARS` (тест)
+- [x] Шаг виден в прогрессе после «Проверка в браузере»; старые диагностики открываются без ошибок
+- [x] Браузер закрывается и профиль удаляется при любом исходе (пусто в `storage/temp` после шага)
+- [x] Проверено вживую на sudar.su, cleansan.ru, citilink.ru (у citilink ожидаемо `skipped` из-за защиты от ботов);
+      время шага разумное
+- [x] `composer test` проходит; в `storage/logs/app.log` нет warnings
+- [x] Проверить `.docs/dod-global.md`
+
+> Проверка 18.11.2026: Citilink в этот раз не показал защиту от ботов, поэтому сценарий дошёл до корзины и создал
+> находку «нет формы оформления» на `/order/`; 52 изменяющих запроса заблокированы, ушло 0. Ветка защиты от ботов
+> проверена тестом, включая защиту, появившуюся только в Chrome.
 
 ## Важные правила
 - Следовать `CLAUDE.md`

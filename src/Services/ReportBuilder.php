@@ -14,6 +14,7 @@ require_once ROOT_PATH . '/src/Services/Checks/SpeedCheck.php';
 require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
 require_once ROOT_PATH . '/src/Services/Ai/SummaryAnalysis.php';
 require_once ROOT_PATH . '/src/Services/AiModels.php';
+require_once ROOT_PATH . '/src/Services/Checks/CheckoutCheck.php';
 
 /** Статусы диагностики, для которых строится отчёт; при `failed` — частичный (то, что успело собраться) */
 const REPORT_STATUSES         = ['done', 'failed'];
@@ -269,6 +270,8 @@ function buildReport(
     $blocked = buildBlockedPageReasons($pages, $summary['blocked'] ?? null);
     $databases = buildReportDatabases($summary['databases'] ?? null, $diagnostic['created_at'] ?? null);
     $pageUrls = buildPageUrlMap($pages);
+    // Страницы сценария заказа — в его карточке: в «Проверенных страницах» их снимки 1366 были бы дублями
+    $listedPages = excludeCheckoutPages($pages, $summary['checkout'] ?? null);
 
     return [
         'partial'           => $partial,
@@ -278,15 +281,19 @@ function buildReport(
         'summary'           => buildReportSummary($summary, findHomeBlockedReason($pages, $blocked)),
         'pagespeed'         => buildReportPageSpeed($summary['pagespeed'] ?? null),
         'pages'             => buildReportPages(
-            $pages,
+            $listedPages,
             $summary['pages'] ?? null,
             $blocked,
-            buildPageScreenshotMap($screenshots, $pageUrls),
+            buildPageScreenshotMap($screenshots, buildPageUrlMap($listedPages)),
             findBrowserStepNote($diagnostic['steps'] ?? [])
         ),
         'findingCount'      => count($findings),
         'findingGroups'     => buildReportFindingGroups($findings, $pageUrls),
-        'findingPageGroups' => buildReportFindingsByPage($findings, $pages, $blocked),
+        'findingPageGroups' => buildReportFindingsByPage(
+            $findings,
+            selectFindingGroupPages($pages, $listedPages, $findings),
+            $blocked
+        ),
         'blockedBadge'      => ['label' => REPORT_PAGE_BLOCKED_LABEL, 'badgeClass' => REPORT_BADGE_BLOCKED],
         'stackGroups'       => buildReportStackGroups($stackItems, buildOutdatedStackMap($findings)),
         'databases'         => $databases,
@@ -298,6 +305,35 @@ function buildReport(
         'aiSummary'         => buildReportAiSummary($diagnostic, $aiFindings, $findings, $stackItems, $aiResults, $catalog),
         'aiSpending'        => buildReportAiSpending($aiResults, $catalog),
     ];
+}
+
+/**
+ * Страницы для «Находок по страницам»: показанные в отчёте и те страницы сценария заказа, на которые ссылается
+ * находка (иначе каждая страница сценария дала бы пустую группу).
+ *
+ * @param list<array<string, mixed>> $pages       все строки `checked_pages`
+ * @param list<array<string, mixed>> $listedPages без страниц сценария (`excludeCheckoutPages()`)
+ * @param list<array<string, mixed>> $findings
+ * @return list<array<string, mixed>>
+ */
+function selectFindingGroupPages(array $pages, array $listedPages, array $findings): array
+{
+    if (count($pages) === count($listedPages)) {
+        return $pages;
+    }
+
+    $referenced = [];
+    foreach ($findings as $finding) {
+        if (isset($finding['page_id'])) {
+            $referenced[(int) $finding['page_id']] = true;
+        }
+    }
+    $listed = array_flip(array_map(static fn (array $page): int => (int) ($page['id'] ?? 0), $listedPages));
+
+    return array_values(array_filter(
+        $pages,
+        static fn (array $page): bool => isset($listed[(int) ($page['id'] ?? 0)]) || isset($referenced[(int) ($page['id'] ?? 0)])
+    ));
 }
 
 /**
