@@ -133,7 +133,8 @@ function claimAiRerun(int $id): bool
 
 /**
  * Подготовка перезапуска ИИ одной транзакцией: недостающие ИИ-шаги добавляются в конец списка, существующие
- * сбрасываются в `pending`, находки `source = 'ai'` удаляются (история `ai_results` остаётся), прогресс — 0.
+ * сбрасываются в `pending`, старые клиентские тексты очищаются, находки `source = 'ai'` удаляются
+ * (история `ai_results` остаётся), прогресс — 0.
  *
  * @param list<array{code: string, title: string}> $steps ИИ-шаги по порядку
  */
@@ -150,6 +151,9 @@ function resetAiSteps(int $id, array $steps): void
     );
     $deleteAiFindings = $pdo->prepare(
         "DELETE FROM findings WHERE diagnostic_id = :id AND source = 'ai'"
+    );
+    $clearClientTexts = $pdo->prepare(
+        'UPDATE findings SET client_text = NULL WHERE diagnostic_id = :id'
     );
     $resetProgress = $pdo->prepare(
         'UPDATE diagnostics SET progress = 0, heartbeat_at = NOW() WHERE id = :id'
@@ -168,6 +172,7 @@ function resetAiSteps(int $id, array $steps): void
                 'position'      => $position + $index + 1,
             ]);
         }
+        $clearClientTexts->execute(['id' => $id]);
         $deleteAiFindings->execute(['id' => $id]);
         $resetProgress->execute(['id' => $id]);
         $pdo->commit();

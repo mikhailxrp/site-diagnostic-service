@@ -13,6 +13,7 @@ return [
         '/settings'                => ['SettingsController', 'index'],
         '/history'                 => ['HistoryController', 'index'],
         '/diagnostics/{id}'        => ['DiagnosticController', 'show'],
+        '/diagnostics/{id}/client' => ['DiagnosticController', 'client'],
         '/diagnostics/{id}/status' => ['DiagnosticController', 'status'],
         '/screenshots/{id}'        => ['ScreenshotController', 'show'],
         '/screenshots/{id}/thumb'  => ['ScreenshotController', 'thumb'],

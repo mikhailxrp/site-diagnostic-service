@@ -29,11 +29,17 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
     <div class="page-header d-print-none">
         <div class="container-xl">
             <div class="row g-2 align-items-center">
-                <div class="col">
+                <div class="col-12 col-sm">
                     <div class="page-pretitle"><?= e($title) ?></div>
                     <h1 class="page-title text-break"><?= e($diagnostic['url']) ?></h1>
                 </div>
-                <div class="col-auto">
+                <div class="col-12 col-sm-auto d-flex flex-wrap align-items-center gap-2">
+                    <?php if (($clientReportUrl ?? null) !== null) : ?>
+                        <a href="<?= e($clientReportUrl) ?>" class="btn btn-outline-primary btn-lg">
+                            <i class="ti ti-file-description icon" aria-hidden="true"></i>
+                            Клиентская версия
+                        </a>
+                    <?php endif; ?>
                     <span class="badge <?= e($diagnostic['badgeClass']) ?>" data-diagnostic-status><?= e($diagnostic['statusLabel']) ?></span>
                 </div>
             </div>

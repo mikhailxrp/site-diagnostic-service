@@ -17,6 +17,7 @@ require_once ROOT_PATH . '/src/Services/JobLauncher.php';
 require_once ROOT_PATH . '/src/Services/DiagnosticStatusService.php';
 require_once ROOT_PATH . '/src/Services/UrlValidator.php';
 require_once ROOT_PATH . '/src/Services/ReportBuilder.php';
+require_once ROOT_PATH . '/src/Services/ClientReportBuilder.php';
 
 /**
  * Запуск диагностики из формы, экран прогресса с отчётом и JSON для опроса.
@@ -48,6 +49,7 @@ final class DiagnosticController
     private const ERROR_MESSAGE_MAX_LENGTH = 1000;
 
     private const HTTP_NOT_FOUND    = 404;
+    private const HTTP_CONFLICT     = 409;
     private const HTTP_SERVER_ERROR = 500;
 
     public function show(string $id): void
@@ -84,6 +86,69 @@ final class DiagnosticController
             'aiRerunUrl'  => $diagnostic['status'] === self::AI_RERUN_STATUS
                 ? '/diagnostics/' . $diagnostic['id'] . '/ai-rerun'
                 : null,
+            'clientReportUrl' => $report !== null
+                ? '/diagnostics/' . $diagnostic['id'] . '/client'
+                : null,
+        ]);
+    }
+
+    /**
+     * Клиентская версия готового или частичного отчёта без технических деталей.
+     */
+    public function client(string $id): void
+    {
+        $diagnosticId = parseDiagnosticId($id);
+
+        try {
+            $diagnostic = $diagnosticId !== null ? $this->loadDiagnostic($diagnosticId) : null;
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId]);
+            http_response_code(self::HTTP_SERVER_ERROR);
+            $this->renderClientEmpty(
+                'Не удалось загрузить отчёт',
+                'Ошибка базы данных. Подробности сохранены в журнале.'
+            );
+            return;
+        }
+
+        if ($diagnostic === null) {
+            http_response_code(self::HTTP_NOT_FOUND);
+            $this->renderClientEmpty('Отчёт не найден', 'Проверьте ссылку: такой диагностики нет.');
+            return;
+        }
+
+        if (!in_array((string) $diagnostic['status'], REPORT_STATUSES, true)) {
+            http_response_code(self::HTTP_CONFLICT);
+            $this->renderClientEmpty(
+                'Отчёт ещё не готов',
+                'Дождитесь завершения диагностики и откройте клиентскую версию снова.',
+                '/diagnostics/' . $diagnosticId
+            );
+            return;
+        }
+
+        try {
+            $report = buildClientReport(
+                $diagnostic,
+                getFindingsByDiagnostic($diagnosticId),
+                null,
+                getAiResultsByDiagnostic($diagnosticId)
+            );
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId]);
+            http_response_code(self::HTTP_SERVER_ERROR);
+            $this->renderClientEmpty(
+                'Не удалось собрать отчёт',
+                'Попробуйте открыть страницу снова. Подробности сохранены в журнале.',
+                '/diagnostics/' . $diagnosticId
+            );
+            return;
+        }
+
+        render('pages/client-report', [
+            'title'        => 'Отчёт для клиента',
+            'report'       => $report,
+            'technicalUrl' => '/diagnostics/' . $diagnosticId,
         ]);
     }
 
@@ -319,6 +384,17 @@ final class DiagnosticController
             'activeMenu' => 'new',
             'diagnostic' => null,
             'emptyText'  => $emptyText,
+        ]);
+    }
+
+    private function renderClientEmpty(string $emptyTitle, string $emptyText, ?string $technicalUrl = null): void
+    {
+        render('pages/client-report', [
+            'title'        => $emptyTitle,
+            'report'       => null,
+            'emptyTitle'   => $emptyTitle,
+            'emptyText'    => $emptyText,
+            'technicalUrl' => $technicalUrl,
         ]);
     }
 

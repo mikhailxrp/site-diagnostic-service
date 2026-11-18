@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 /**
  * Общий макет (начало): <head>, шапка с меню, открывает <main>.
- * Ожидает: $title — заголовок страницы, $activeMenu — ключ активного пункта меню.
+ * Ожидает: $title — заголовок страницы, $activeMenu — ключ активного пункта меню,
+ * $showNavigation — выводить главное меню (по умолчанию true).
  */
+
+$showNavigation = $showNavigation ?? true;
 
 $menuItems = [
     'new'      => ['href' => '/', 'icon' => 'ti-stethoscope', 'label' => 'Новая диагностика'],
@@ -29,24 +32,28 @@ $menuItems = [
 <div class="page">
     <header class="navbar navbar-expand-md d-print-none">
         <div class="container-xl">
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar-menu"
-                    aria-controls="navbar-menu" aria-expanded="false" aria-label="Открыть меню">
-                <span class="navbar-toggler-icon"></span>
-            </button>
+            <?php if ($showNavigation) : ?>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar-menu"
+                        aria-controls="navbar-menu" aria-expanded="false" aria-label="Открыть меню">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+            <?php endif; ?>
             <a href="/" class="navbar-brand navbar-brand-autodark pe-0 pe-md-3"><?= e(APP_NAME) ?></a>
-            <nav class="collapse navbar-collapse" id="navbar-menu" aria-label="Главное меню">
-                <ul class="navbar-nav">
-                    <?php foreach ($menuItems as $menuKey => $menuItem) : ?>
-                        <?php $isActive = $menuKey === $activeMenu; ?>
-                        <li class="nav-item<?= $isActive ? ' active' : '' ?>">
-                            <a class="nav-link" href="<?= e($menuItem['href']) ?>"<?= $isActive ? ' aria-current="page"' : '' ?>>
-                                <span class="nav-link-icon"><i class="ti <?= e($menuItem['icon']) ?>" aria-hidden="true"></i></span>
-                                <span class="nav-link-title"><?= e($menuItem['label']) ?></span>
-                            </a>
-                        </li>
-                    <?php endforeach; ?>
-                </ul>
-            </nav>
+            <?php if ($showNavigation) : ?>
+                <nav class="collapse navbar-collapse" id="navbar-menu" aria-label="Главное меню">
+                    <ul class="navbar-nav">
+                        <?php foreach ($menuItems as $menuKey => $menuItem) : ?>
+                            <?php $isActive = $menuKey === $activeMenu; ?>
+                            <li class="nav-item<?= $isActive ? ' active' : '' ?>">
+                                <a class="nav-link" href="<?= e($menuItem['href']) ?>"<?= $isActive ? ' aria-current="page"' : '' ?>>
+                                    <span class="nav-link-icon"><i class="ti <?= e($menuItem['icon']) ?>" aria-hidden="true"></i></span>
+                                    <span class="nav-link-title"><?= e($menuItem['label']) ?></span>
+                                </a>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                </nav>
+            <?php endif; ?>
         </div>
     </header>
     <main class="page-wrapper">

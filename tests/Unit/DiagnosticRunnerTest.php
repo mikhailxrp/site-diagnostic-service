@@ -77,7 +77,7 @@ final class DiagnosticRunnerTest extends TestCase
     public function testAiStepsAreOnlyAiStepsInOrder(): void
     {
         $this->assertSame(
-            ['ai_problem', 'ai_visual', 'ai_summary'],
+            ['ai_problem', 'ai_visual', 'ai_summary', 'ai_client'],
             array_column(getAiSteps(), 'code')
         );
     }
@@ -90,7 +90,7 @@ final class DiagnosticRunnerTest extends TestCase
         ];
 
         $this->assertSame(
-            ['runAiProblemStep', 'runAiVisualStep', 'runAiSummaryStep'],
+            ['runAiProblemStep', 'runAiVisualStep', 'runAiSummaryStep', 'runAiClientStep'],
             array_column(getAiSteps(), 'handler')
         );
         $this->assertSame([], array_intersect($siteHandlers, array_column(getAiSteps(), 'handler')));
@@ -103,6 +103,28 @@ final class DiagnosticRunnerTest extends TestCase
         foreach (getAiSteps() as $step) {
             $this->assertSame($full[$step['code']], $step);
         }
+    }
+
+    public function testAiClientWithoutKeyIsSkippedBeforeDatabaseOrNetwork(): void
+    {
+        $previousEnv = $_ENV['ROUTERAI_API_KEY'] ?? null;
+        $previousProcess = getenv('ROUTERAI_API_KEY');
+        unset($_ENV['ROUTERAI_API_KEY']);
+        putenv('ROUTERAI_API_KEY');
+
+        try {
+            $result = runAiClientStep(['diagnostic' => ['id' => 7]]);
+        } finally {
+            if ($previousEnv !== null) {
+                $_ENV['ROUTERAI_API_KEY'] = $previousEnv;
+            }
+            if ($previousProcess !== false) {
+                putenv('ROUTERAI_API_KEY=' . $previousProcess);
+            }
+        }
+
+        $this->assertSame(STEP_STATUS_SKIPPED, $result['status']);
+        $this->assertSame(AI_ERROR_NO_KEY, $result['message']);
     }
 
     #[DataProvider('progressCases')]
@@ -300,7 +322,7 @@ final class DiagnosticRunnerTest extends TestCase
     {
         $this->assertSame(
             ['availability', 'stack', 'outdated', 'vulnerabilities', 'crawl', 'resources', 'seo', 'exposed_files', 'browser',
-                'checkout', 'pagespeed', 'ai_problem', 'ai_visual', 'ai_summary'],
+                'checkout', 'pagespeed', 'ai_problem', 'ai_visual', 'ai_summary', 'ai_client'],
             array_column(getDiagnosticSteps(), 'code')
         );
     }

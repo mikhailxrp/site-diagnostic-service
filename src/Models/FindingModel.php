@@ -51,7 +51,7 @@ function insertFinding(int $diagnosticId, array $finding): int
 function getFindingsByDiagnostic(int $diagnosticId): array
 {
     $statement = getPdo()->prepare(
-        "SELECT id, page_id, source, category, severity, title, details, location, evidence, fingerprint, ai_result_id
+        "SELECT id, page_id, source, category, severity, title, details, client_text, location, evidence, fingerprint, ai_result_id
          FROM findings
          WHERE diagnostic_id = :diagnostic_id
          ORDER BY FIELD(severity, 'critical', 'high', 'medium', 'low', 'info'), id"
@@ -67,4 +67,37 @@ function getFindingsByDiagnostic(int $diagnosticId): array
         },
         $statement->fetchAll()
     );
+}
+
+/**
+ * Полностью заменяет клиентские тексты одной диагностики. Пропущенные id остаются с `NULL`, id другой
+ * диагностики не обновляются. Транзакция не допускает частично применённый ответ ИИ.
+ *
+ * @param list<array{finding_id: int, text: string}> $texts
+ */
+function replaceFindingClientTexts(int $diagnosticId, array $texts): void
+{
+    $pdo = getPdo();
+    $clear = $pdo->prepare('UPDATE findings SET client_text = NULL WHERE diagnostic_id = :diagnostic_id');
+    $update = $pdo->prepare(
+        'UPDATE findings
+         SET client_text = :client_text
+         WHERE id = :finding_id AND diagnostic_id = :diagnostic_id'
+    );
+
+    $pdo->beginTransaction();
+    try {
+        $clear->execute(['diagnostic_id' => $diagnosticId]);
+        foreach ($texts as $item) {
+            $update->execute([
+                'client_text'  => $item['text'],
+                'finding_id'   => $item['finding_id'],
+                'diagnostic_id' => $diagnosticId,
+            ]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
 }

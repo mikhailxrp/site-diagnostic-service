@@ -37,6 +37,7 @@ require_once ROOT_PATH . '/src/Services/AiClient.php';
 require_once ROOT_PATH . '/src/Services/Ai/ProblemAnalysis.php';
 require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
 require_once ROOT_PATH . '/src/Services/Ai/SummaryAnalysis.php';
+require_once ROOT_PATH . '/src/Services/Ai/ClientTextAnalysis.php';
 require_once ROOT_PATH . '/src/Services/AiModels.php';
 
 const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
@@ -75,6 +76,7 @@ function getDiagnosticSteps(): array
         ['code' => 'ai_problem',   'title' => 'Разбор проблемы (ИИ)',    'handler' => 'runAiProblemStep'],
         ['code' => 'ai_visual',    'title' => 'Проверка вёрстки (ИИ)',   'handler' => 'runAiVisualStep'],
         ['code' => 'ai_summary',   'title' => 'Итоговый вывод (ИИ)',     'handler' => 'runAiSummaryStep'],
+        ['code' => 'ai_client',    'title' => 'Текст для клиента (ИИ)',  'handler' => 'runAiClientStep'],
     ];
 }
 
@@ -677,6 +679,57 @@ function runAiSummaryStep(array $context): array
         makeAiSender($key),
         static fn (array $record): int => insertAiResult($diagnosticId, $record)
     );
+    touchDiagnosticHeartbeat($diagnosticId);
+
+    return [
+        'status'  => STEP_STATUS_DONE,
+        'message' => $analysis['message'],
+        'facts'   => ['ai_result_id' => $analysis['ai_result_id']],
+    ];
+}
+
+/**
+ * Шаг `ai_client`: находки и технический итог текущего запуска **из БД** → RouterAI → безопасные тексты в
+ * `findings.client_text`, общее резюме — в `ai_results.parsed_json`. Нет ключа → `skipped` и шаблонный отчёт.
+ *
+ * @param array<string, mixed> $context
+ * @return array<string, mixed>
+ */
+function runAiClientStep(array $context): array
+{
+    $key = env('ROUTERAI_API_KEY', '');
+    $keyError = validateAiKey($key);
+    if ($keyError !== null) {
+        return ['status' => STEP_STATUS_SKIPPED, 'message' => $keyError];
+    }
+
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    $aiResults = getAiResultsByDiagnostic($diagnosticId);
+    $summaryStep = findClientDiagnosticStep($diagnostic['steps'] ?? [], 'ai_summary');
+    $summaryResult = findCurrentClientAiResult(
+        $aiResults,
+        AI_TASK_SUMMARY,
+        $summaryStep['started_at'] ?? null
+    );
+    $technicalSummary = ($summaryStep['status'] ?? null) === STEP_STATUS_DONE
+        && ($summaryResult['status'] ?? null) === AI_RESULT_STATUS_OK
+        && is_array($summaryResult['parsed_json'] ?? null)
+        && is_string($summaryResult['parsed_json']['verdict'] ?? null)
+            ? $summaryResult['parsed_json']['verdict']
+            : null;
+    $findings = getFindingsByDiagnostic($diagnosticId);
+    $analysis = runClientTextAnalysis(
+        $diagnosticId,
+        $findings,
+        $technicalSummary,
+        resolveModelSetting(getSetting(AI_CLIENT_MODEL_SETTING)),
+        $key,
+        loadClientPrompt(),
+        makeAiSender($key),
+        static fn (array $record): int => insertAiResult($diagnosticId, $record)
+    );
+    replaceFindingClientTexts($diagnosticId, $analysis['texts']);
     touchDiagnosticHeartbeat($diagnosticId);
 
     return [
