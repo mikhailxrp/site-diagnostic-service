@@ -761,6 +761,87 @@ final class ReportBuilderTest extends TestCase
         $this->assertCount(3, array_column($old['pages'], 'type'), 'без summary_json.checkout — как раньше');
     }
 
+    public function testCheckoutReportShowsReachedScenarioAndTrustedScreenshots(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['checkout' => [
+            'outcome' => 'reached',
+            'reached' => 'checkout',
+            'posts'   => ['checkout_sent' => 0, 'blocked' => 3],
+            'steps'   => [
+                ['code' => 'product', 'status' => 'done', 'url' => 'https://shop.ru/product/', 'screenshot_id' => 41,
+                    'console_errors' => 0, 'console_sample' => []],
+                ['code' => 'add_to_cart', 'status' => 'done', 'screenshot_id' => 42, 'console_errors' => 0],
+                ['code' => 'cart', 'status' => 'done', 'screenshot_id' => 43, 'console_errors' => 1,
+                    'console_sample' => ['warning']],
+                ['code' => 'checkout', 'status' => 'done', 'screenshot_id' => 44, 'console_errors' => 0],
+            ],
+        ]], JSON_UNESCAPED_SLASHES);
+        $screenshots = array_map(
+            static fn (int $id): array => ['id' => $id, 'viewport_width' => 1366],
+            [41, 42, 43, 44]
+        );
+
+        $checkout = buildReport($diagnostic, [], [], [], $screenshots)['checkout'];
+
+        $this->assertNotNull($checkout);
+        $this->assertSame('Форма оформления открылась', $checkout['outcomeLabel']);
+        $this->assertSame('Оформление', $checkout['reachedLabel']);
+        $this->assertSame(0, $checkout['checkoutSent']);
+        $this->assertSame(3, $checkout['blockedPosts']);
+        $this->assertFalse($checkout['unsafeRequest']);
+        $this->assertSame(['Товар', 'В корзину', 'Корзина', 'Оформление'], array_column($checkout['steps'], 'label'));
+        $this->assertSame('warning', $checkout['steps'][2]['consoleSample'][0]);
+        $this->assertSame('/screenshots/44/thumb', $checkout['steps'][3]['gallery']['screenshots'][0]['thumbUrl']);
+        $this->assertCount(4, array_unique(array_column(array_map(
+            static fn (array $step): array => $step['gallery']['screenshots'][0],
+            $checkout['steps']
+        ), 'modalId')));
+    }
+
+    public function testCheckoutReportShowsFailureAndRejectsForeignScreenshot(): void
+    {
+        $diagnostic = $this->diagnostic();
+        $diagnostic['summary_json'] = json_encode(['checkout' => [
+            'outcome' => 'failed',
+            'reached' => 'cart',
+            'posts'   => ['checkout_sent' => 1, 'blocked' => 2],
+            'steps'   => [
+                ['code' => 'future_step', 'status' => 'unexpected', 'screenshot_id' => 999,
+                    'console_errors' => 2, 'console_sample' => ['<script>alert(1)</script>', ['ignored']]],
+            ],
+        ]]);
+
+        $report = buildReport(
+            $diagnostic,
+            [$this->finding('critical', 'Нет формы', ['category' => 'checkout'])],
+            [],
+            [],
+            [['id' => 41, 'viewport_width' => 1366]]
+        );
+        $checkout = $report['checkout'];
+
+        $this->assertNotNull($checkout);
+        $this->assertSame(['Нет формы'], array_column($report['findingGroups'][0]['items'], 'title'));
+        $this->assertSame('Сценарий остановился', $checkout['outcomeLabel']);
+        $this->assertTrue($checkout['unsafeRequest']);
+        $this->assertSame('future_step', $checkout['steps'][0]['label']);
+        $this->assertSame('unexpected', $checkout['steps'][0]['statusLabel']);
+        $this->assertSame(['<script>alert(1)</script>'], $checkout['steps'][0]['consoleSample']);
+        $this->assertSame([], $checkout['steps'][0]['gallery']['screenshots']);
+    }
+
+    public function testCheckoutReportIsAbsentForOldOrMalformedSummary(): void
+    {
+        $this->assertNull(buildReport($this->diagnostic(), [], [], [])['checkout']);
+
+        foreach (['{broken', json_encode(['checkout' => 'broken']), json_encode(['checkout' => ['steps' => []]])] as $summary) {
+            $diagnostic = $this->diagnostic();
+            $diagnostic['summary_json'] = $summary;
+            $this->assertNull(buildReport($diagnostic, [], [], [])['checkout']);
+        }
+    }
+
     public function testNoPagesGivesOnlySiteWideGroup(): void
     {
         $groups = buildReport($this->diagnostic(), [$this->finding('high', 'Нет ответа')], [], [])['findingPageGroups'];

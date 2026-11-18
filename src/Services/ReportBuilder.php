@@ -130,6 +130,17 @@ const REPORT_SCREENSHOT_MODAL_ID   = 'screenshot-%s-%d'; // тип в id: оди
 const REPORT_SCREENSHOTS_EMPTY     = 'Скриншотов нет.';
 const REPORT_BROWSER_STEP_CODE     = 'browser';
 
+/** Карточка сценария заказа (`summary_json.checkout`) */
+const REPORT_CHECKOUT_OUTCOMES = [
+    CHECKOUT_OUTCOME_REACHED => ['label' => 'Форма оформления открылась', 'badgeClass' => 'bg-green-lt'],
+    CHECKOUT_OUTCOME_FAILED  => ['label' => 'Сценарий остановился', 'badgeClass' => 'bg-red-lt'],
+    CHECKOUT_OUTCOME_SKIPPED => ['label' => 'Проверка пропущена', 'badgeClass' => 'bg-yellow-lt'],
+];
+const REPORT_CHECKOUT_UNKNOWN_OUTCOME = 'Статус сценария неизвестен';
+const REPORT_CHECKOUT_UNKNOWN_STEP    = 'Шаг без кода';
+const REPORT_CHECKOUT_SCREENSHOT_EMPTY = 'Скриншот шага не сохранён.';
+const REPORT_CHECKOUT_SCREENSHOT_WIDTH = 1366;
+
 /** Группа «По страницам» для находок без страницы (SSL, стек и т. п.) */
 const REPORT_NO_PAGE_GROUP_TITLE = 'Сайт целиком';
 const REPORT_PAGE_TYPES_SEPARATOR = ', ';
@@ -246,7 +257,7 @@ const REPORT_AI_COST_FORMAT = '≈ %s';
  * @param list<array<string, mixed>> $aiResults  из getAiResultsByDiagnostic()
  * @param array<string, array>|null  $catalog    модели RouterAI с ценами (loadRouterAiModels()['models']);
  *                                               null — стоимость неизвестна
- * @return array{partial: bool, productUrl: ?string, summary: ?array, pagespeed: ?array, pages: list<array>,
+ * @return array{partial: bool, productUrl: ?string, summary: ?array, checkout: ?array, pagespeed: ?array, pages: list<array>,
  *               findingCount: int,
  *               findingGroups: list<array>, findingPageGroups: list<array>, blockedBadge: array,
  *               stackGroups: list<array>, databases: list<array>, databasesStale: bool, databasesWarning: string,
@@ -279,6 +290,7 @@ function buildReport(
             ? (string) $diagnostic['product_url']
             : null,
         'summary'           => buildReportSummary($summary, findHomeBlockedReason($pages, $blocked)),
+        'checkout'          => buildReportCheckout($summary['checkout'] ?? null, $screenshots),
         'pagespeed'         => buildReportPageSpeed($summary['pagespeed'] ?? null),
         'pages'             => buildReportPages(
             $listedPages,
@@ -846,11 +858,11 @@ function buildPageScreenshotMap(array $screenshots, array $pageUrls): array
 {
     $map = [];
     foreach ($screenshots as $screenshot) {
-        $url = $pageUrls[(int) $screenshot['page_id']] ?? null;
+        $url = $pageUrls[(int) ($screenshot['page_id'] ?? 0)] ?? null;
         if ($url !== null) {
             $map[normalizeFindingLocation($url)][] = [
-                'id'    => (int) $screenshot['id'],
-                'width' => (int) $screenshot['viewport_width'],
+                'id'    => (int) ($screenshot['id'] ?? 0),
+                'width' => (int) ($screenshot['viewport_width'] ?? 0),
             ];
         }
     }
@@ -880,6 +892,102 @@ function buildReportScreenshots(array $screenshots, string $type, string $label)
         'thumbAlt' => sprintf(REPORT_SCREENSHOT_THUMB_ALT, $label, $screenshot['width']),
         'modalId'  => sprintf(REPORT_SCREENSHOT_MODAL_ID, $type, $screenshot['id']),
     ], $screenshots);
+}
+
+/**
+ * Сценарий заказа для отчёта. Доверяем ссылке на снимок только после сверки с выборкой текущей диагностики.
+ *
+ * @param list<array<string, mixed>> $screenshots строки `screenshots` текущей диагностики
+ * @return array<string, mixed>|null
+ */
+function buildReportCheckout(mixed $checkout, array $screenshots): ?array
+{
+    if (!is_array($checkout) || !is_array($checkout['steps'] ?? null) || $checkout['steps'] === []) {
+        return null;
+    }
+
+    $availableScreenshots = [];
+    foreach ($screenshots as $screenshot) {
+        $id = (int) ($screenshot['id'] ?? 0);
+        if ($id > 0) {
+            $availableScreenshots[$id] = [
+                'id'    => $id,
+                'width' => max(1, (int) ($screenshot['viewport_width'] ?? REPORT_CHECKOUT_SCREENSHOT_WIDTH)),
+            ];
+        }
+    }
+
+    $steps = [];
+    foreach (array_values($checkout['steps']) as $index => $step) {
+        if (!is_array($step)) {
+            continue;
+        }
+        $steps[] = buildReportCheckoutStep($step, $index, $availableScreenshots);
+    }
+    if ($steps === []) {
+        return null;
+    }
+
+    $outcome = (string) ($checkout['outcome'] ?? '');
+    $outcomeView = REPORT_CHECKOUT_OUTCOMES[$outcome] ?? [
+        'label'      => REPORT_CHECKOUT_UNKNOWN_OUTCOME,
+        'badgeClass' => REPORT_BADGE_NEUTRAL,
+    ];
+    $reached = (string) ($checkout['reached'] ?? '');
+    $posts = is_array($checkout['posts'] ?? null) ? $checkout['posts'] : [];
+    $checkoutSent = max(0, (int) ($posts['checkout_sent'] ?? 0));
+
+    return [
+        'outcome'       => $outcome,
+        'outcomeLabel'  => $outcomeView['label'],
+        'badgeClass'    => $outcomeView['badgeClass'],
+        'reachedLabel'  => $reached === '' ? null : (CHECKOUT_STEP_LABELS[$reached] ?? $reached),
+        'blockedPosts'  => max(0, (int) ($posts['blocked'] ?? 0)),
+        'checkoutSent'  => $checkoutSent,
+        'unsafeRequest' => $checkoutSent > 0,
+        'steps'         => $steps,
+    ];
+}
+
+/**
+ * @param array<string, mixed> $step
+ * @param array<int, array{id: int, width: int}> $availableScreenshots
+ * @return array<string, mixed>
+ */
+function buildReportCheckoutStep(array $step, int $index, array $availableScreenshots): array
+{
+    $code = (string) ($step['code'] ?? '');
+    $status = (string) ($step['status'] ?? '');
+    $screenshotId = (int) ($step['screenshot_id'] ?? 0);
+    $screenshot = $availableScreenshots[$screenshotId] ?? null;
+    $label = $code === '' ? REPORT_CHECKOUT_UNKNOWN_STEP : (CHECKOUT_STEP_LABELS[$code] ?? $code);
+    $consoleSample = [];
+    if (is_array($step['console_sample'] ?? null)) {
+        foreach ($step['console_sample'] as $message) {
+            if (is_string($message) || is_numeric($message)) {
+                $consoleSample[] = (string) $message;
+            }
+        }
+    }
+
+    return [
+        'code'           => $code,
+        'label'          => $label,
+        'status'         => $status,
+        'statusLabel'    => STEP_STATUS_LABELS[$status] ?? ($status !== '' ? $status : 'Неизвестно'),
+        'badgeClass'     => STEP_STATUS_BADGES[$status] ?? REPORT_BADGE_NEUTRAL,
+        'url'            => isset($step['url']) && is_string($step['url']) && $step['url'] !== '' ? $step['url'] : null,
+        'note'           => isset($step['note']) && is_string($step['note']) && $step['note'] !== '' ? $step['note'] : null,
+        'consoleErrors'  => max(0, (int) ($step['console_errors'] ?? 0)),
+        'consoleSample'  => $consoleSample,
+        'gallery'        => [
+            'screenshots'     => $screenshot === null
+                ? []
+                : buildReportScreenshots([$screenshot], 'checkout-step-' . $index, 'Сценарий заказа — ' . $label),
+            'screenshotsEmpty' => REPORT_CHECKOUT_SCREENSHOT_EMPTY,
+            'screenshotsNote'  => null,
+        ],
+    ];
 }
 
 /**

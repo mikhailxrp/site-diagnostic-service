@@ -398,6 +398,47 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                     </section>
                                 </div>
                             <?php endif; ?>
+                            <?php if ($report['checkout'] !== null) : ?>
+                                <div class="col-12">
+                                    <section class="card" aria-labelledby="report-checkout-title">
+                                        <div class="card-header">
+                                            <div>
+                                                <h2 class="card-title" id="report-checkout-title">Сценарий заказа</h2>
+                                                <?php if ($report['checkout']['reachedLabel'] !== null) : ?>
+                                                    <p class="card-subtitle mb-0 text-break">
+                                                        Последний достигнутый шаг: <?= e($report['checkout']['reachedLabel']) ?>
+                                                    </p>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="card-actions">
+                                                <span class="badge <?= e($report['checkout']['badgeClass']) ?>">
+                                                    <?= e($report['checkout']['outcomeLabel']) ?>
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <dl class="datagrid mb-0">
+                                                <div class="datagrid-item">
+                                                    <dt class="datagrid-title">Изменяющих запросов ушло</dt>
+                                                    <dd class="datagrid-content mb-0"><?= e($report['checkout']['checkoutSent']) ?></dd>
+                                                </div>
+                                                <div class="datagrid-item">
+                                                    <dt class="datagrid-title">Изменяющих запросов заблокировано</dt>
+                                                    <dd class="datagrid-content mb-0"><?= e($report['checkout']['blockedPosts']) ?></dd>
+                                                </div>
+                                            </dl>
+                                            <?php if ($report['checkout']['unsafeRequest']) : ?>
+                                                <div class="alert alert-danger mt-3 mb-0" role="alert">
+                                                    <div class="alert-description">
+                                                        Сценарий отправил изменяющий запрос. Проверьте действия на тестовом магазине.
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                        <?php render('components/checkout-steps', ['checkout' => $report['checkout']]); ?>
+                                    </section>
+                                </div>
+                            <?php endif; ?>
                             <?php if ($report['pagespeed'] !== null) : ?>
                                 <div class="col-12">
                                     <section class="card" aria-labelledby="report-speed-title">

@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use PHPUnit\Framework\TestCase;
 
 require_once ROOT_PATH . '/src/Services/FactPacker.php';
+require_once ROOT_PATH . '/src/Services/Checks/CheckoutCheck.php';
 
 final class FactPackerTest extends TestCase
 {
@@ -98,6 +99,34 @@ final class FactPackerTest extends TestCase
         $this->assertSame(FACT_EVIDENCE_MAX_CHARS, mb_strlen($fact['evidence']));
         $this->assertIsString($result['pack']['summary']['pagespeed']);
         $this->assertSame(FACT_SECTION_MAX_CHARS, mb_strlen($result['pack']['summary']['pagespeed']));
+    }
+
+    public function testCheckoutSummaryIsPackedWithoutScenarioPages(): void
+    {
+        $checkout = [
+            'outcome' => 'reached',
+            'reached' => 'checkout',
+            'steps'   => [
+                ['code' => 'product', 'status' => 'done', 'page_id' => 11],
+                ['code' => 'checkout', 'status' => 'done', 'page_id' => 12],
+            ],
+            'posts'    => ['checkout_sent' => 0, 'blocked' => 2],
+            'page_ids' => [11, 12],
+        ];
+        $pages = [
+            ['id' => 1, 'url' => 'https://shop.ru/', 'page_type' => 'home', 'http_code' => 200, 'response_ms' => 100,
+                'blocked' => 0],
+            ['id' => 11, 'url' => 'https://shop.ru/product/', 'page_type' => 'product', 'http_code' => null,
+                'response_ms' => null, 'blocked' => 0],
+            ['id' => 12, 'url' => 'https://shop.ru/checkout/', 'page_type' => 'checkout', 'http_code' => null,
+                'response_ms' => null, 'blocked' => 0],
+        ];
+
+        $result = buildFactPack([], [], excludeCheckoutPages($pages, $checkout), ['checkout' => $checkout]);
+
+        $this->assertSame($checkout, $result['pack']['summary']['checkout']);
+        $this->assertLessThanOrEqual(FACT_SECTION_MAX_CHARS, getFactJsonLength($result['pack']['summary']['checkout']));
+        $this->assertSame(['https://shop.ru/'], array_column($result['pack']['pages'], 'url'));
     }
 
     /**
