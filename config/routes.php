@@ -12,6 +12,7 @@ return [
         '/'                        => ['HomeController', 'index'],
         '/settings'                => ['SettingsController', 'index'],
         '/history'                 => ['HistoryController', 'index'],
+        '/compare'                 => ['CompareController', 'index'],
         '/diagnostics/{id}'        => ['DiagnosticController', 'show'],
         '/diagnostics/{id}/client' => ['DiagnosticController', 'client'],
         '/diagnostics/{id}/pdf'    => ['ExportController', 'download'],
@@ -24,6 +25,7 @@ return [
         '/settings/browser'        => ['SettingsController', 'saveBrowser'],
         '/diagnostics'             => ['DiagnosticController', 'store'],
         '/diagnostics/{id}/delete' => ['HistoryController', 'delete'],
+        '/diagnostics/{id}/repeat' => ['DiagnosticController', 'repeat'],
         '/diagnostics/{id}/ai-rerun' => ['DiagnosticController', 'rerunAi'],
     ],
 ];

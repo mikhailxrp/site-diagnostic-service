@@ -35,6 +35,11 @@ final class DiagnosticController
     private const RATE_LIMIT_MAX_ATTEMPTS   = 5;
     private const RATE_LIMIT_WINDOW_SECONDS = 60;
 
+    /** Повтор полной диагностики — не больше 5 запусков за 60 секунд. */
+    private const REPEAT_RATE_LIMIT_ACTION         = 'diagnostic_repeat';
+    private const REPEAT_RATE_LIMIT_MAX_ATTEMPTS   = 5;
+    private const REPEAT_RATE_LIMIT_WINDOW_SECONDS = 60;
+
     /**
      * Перезапуск ИИ-анализа — платные запросы к RouterAI: не больше 3 за 60 секунд.
      */
@@ -92,7 +97,11 @@ final class DiagnosticController
             'fullPdfUrl' => $report !== null
                 ? '/diagnostics/' . $diagnostic['id'] . '/pdf?version=full'
                 : null,
-            'printDate' => (string) ($row['created_at'] ?? ''),
+            'repeatUrl' => $hasReport
+                ? '/diagnostics/' . $diagnostic['id'] . '/repeat'
+                : null,
+            'compareUrl' => $hasReport ? $this->buildCompareUrl($row) : null,
+            'printDate'  => (string) ($row['created_at'] ?? ''),
         ]);
     }
 
@@ -155,6 +164,80 @@ final class DiagnosticController
             'technicalUrl' => '/diagnostics/' . $diagnosticId,
             'clientPdfUrl' => '/diagnostics/' . $diagnosticId . '/pdf?version=client',
         ]);
+    }
+
+    /**
+     * Повторяет завершённую диагностику с сохранёнными исходными данными и запускает полный воркер.
+     */
+    public function repeat(string $id): void
+    {
+        requireCsrf();
+
+        $sourceId = parseDiagnosticId($id);
+        if ($sourceId === null) {
+            setFlash('error', 'Диагностика не найдена.');
+            redirect('/history');
+        }
+        $sourceUrl = '/diagnostics/' . $sourceId;
+
+        try {
+            $source = $this->loadDiagnostic($sourceId);
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $sourceId]);
+            setFlash('error', 'Не удалось загрузить диагностику. Подробности в журнале.');
+            redirect($sourceUrl);
+        }
+
+        if ($source === null) {
+            setFlash('error', 'Диагностика не найдена.');
+            redirect('/history');
+        }
+        if (!in_array((string) $source['status'], REPORT_STATUSES, true)) {
+            setFlash('error', 'Повтор доступен только после завершения диагностики.');
+            redirect($sourceUrl);
+        }
+
+        if (tooManyAttempts(
+            self::REPEAT_RATE_LIMIT_ACTION,
+            self::REPEAT_RATE_LIMIT_MAX_ATTEMPTS,
+            self::REPEAT_RATE_LIMIT_WINDOW_SECONDS
+        )) {
+            logWarning('Превышен лимит повторных диагностик', [
+                'diagnostic_id'  => $sourceId,
+                'max_attempts'   => self::REPEAT_RATE_LIMIT_MAX_ATTEMPTS,
+                'window_seconds' => self::REPEAT_RATE_LIMIT_WINDOW_SECONDS,
+            ]);
+            setFlash('error', 'Слишком много повторов подряд. Подождите минуту и попробуйте снова.');
+            redirect($sourceUrl);
+        }
+        hitRateLimit(self::REPEAT_RATE_LIMIT_ACTION, self::REPEAT_RATE_LIMIT_WINDOW_SECONDS);
+
+        try {
+            $host = (string) $source['host'];
+            $previousId = findLatestDiagnosticIdByHost($host);
+            $diagnosticId = createDiagnostic(
+                (string) $source['url'],
+                $host,
+                $this->nullableStoredText($source['problem_text'] ?? null),
+                $previousId,
+                $this->nullableStoredText($source['product_url'] ?? null)
+            );
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $sourceId]);
+            setFlash('error', 'Не удалось создать повторную диагностику. Подробности в журнале.');
+            redirect($sourceUrl);
+        }
+
+        try {
+            launchWorker($diagnosticId, WORKER_MODE_FULL);
+            setFlash('success', 'Повторная диагностика запущена.');
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $diagnosticId, 'previous_id' => $previousId]);
+            $this->markLaunchFailed($diagnosticId, $e->getMessage());
+            setFlash('error', 'Не удалось запустить повторную диагностику: ' . $e->getMessage());
+        }
+
+        redirect('/diagnostics/' . $diagnosticId);
     }
 
     /**
@@ -330,6 +413,47 @@ final class DiagnosticController
 
             return null;
         }
+    }
+
+    /**
+     * Ссылка доступна только когда сохранённая предыдущая диагностика существует, относится к тому же хосту
+     * и обе стороны имеют готовый или частичный отчёт.
+     *
+     * @param array<string, mixed> $diagnostic
+     */
+    private function buildCompareUrl(array $diagnostic): ?string
+    {
+        $currentId = (int) $diagnostic['id'];
+        $previousId = parseDiagnosticId((string) ($diagnostic['previous_id'] ?? ''));
+        if ($previousId === null || $previousId === $currentId) {
+            return null;
+        }
+
+        try {
+            $previous = getDiagnosticWithSteps($previousId);
+        } catch (Throwable $e) {
+            logException($e, ['diagnostic_id' => $currentId, 'previous_id' => $previousId]);
+            return null;
+        }
+
+        if (
+            $previous === null
+            || (string) $previous['host'] !== (string) $diagnostic['host']
+            || !in_array((string) $previous['status'], REPORT_STATUSES, true)
+        ) {
+            return null;
+        }
+
+        return '/compare?a=' . $previousId . '&b=' . $currentId;
+    }
+
+    private function nullableStoredText(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return (string) $value;
     }
 
     /**

@@ -8,6 +8,7 @@ declare(strict_types=1);
  * Ожидает: $title, $activeMenu, $diagnostic (результат buildDiagnosticStatus() или null — не найдена / ошибка),
  * $statusUrl, $hasReport, $report (результат buildReport() или null), $reportError (если $diagnostic есть),
  * $emptyText (если $diagnostic = null), $fullPdfUrl — адрес полного PDF или null,
+ * $repeatUrl — POST повтора или null, $compareUrl — сравнение с предыдущей диагностикой или null,
  * $isPdfExport — статичный режим печати, $printDate — дата диагностики для печатной шапки.
  */
 
@@ -41,6 +42,21 @@ render('admin/layout/header', [
                     <h1 class="page-title text-break"><?= e($diagnostic['url']) ?></h1>
                 </div>
                 <div class="col-12 col-sm-auto d-flex flex-wrap align-items-center gap-2">
+                    <?php if (!$isPdfExport && ($repeatUrl ?? null) !== null) : ?>
+                        <form method="post" action="<?= e($repeatUrl) ?>" class="m-0">
+                            <?= csrfField() ?>
+                            <button type="submit" class="btn btn-primary btn-lg">
+                                <i class="ti ti-refresh icon" aria-hidden="true"></i>
+                                Повторить диагностику
+                            </button>
+                        </form>
+                    <?php endif; ?>
+                    <?php if (!$isPdfExport && ($compareUrl ?? null) !== null) : ?>
+                        <a href="<?= e($compareUrl) ?>" class="btn btn-outline-primary btn-lg">
+                            <i class="ti ti-arrows-diff icon" aria-hidden="true"></i>
+                            Сравнить с прошлой
+                        </a>
+                    <?php endif; ?>
                     <?php if (($fullPdfUrl ?? null) !== null) : ?>
                         <a href="<?= e($fullPdfUrl) ?>" class="btn btn-outline-primary btn-lg">
                             <i class="ti ti-file-type-pdf icon" aria-hidden="true"></i>
