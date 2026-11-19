@@ -206,44 +206,59 @@ function rateLimitStoragePath(string $action): string
     return $dir . '/' . sha1($action . '|' . $ip) . '.json';
 }
 
-function tooManyAttempts(string $action, int $maxAttempts, int $decaySeconds = 60): bool
-{
-    $path = rateLimitStoragePath($action);
-    if (!is_file($path)) {
-        return false;
-    }
-    $data = json_decode((string) file_get_contents($path), true);
-    if (!is_array($data) || !isset($data['count'], $data['first_at'])) {
-        return false;
-    }
-    if (time() - (int) $data['first_at'] > $decaySeconds) {
-        return false;
-    }
-    return (int) $data['count'] >= $maxAttempts;
-}
-
 /**
- * Засчитывает попытку. Если окно `$decaySeconds` с первой попытки истекло, счёт начинается заново —
- * иначе после первого окна `tooManyAttempts()` больше никогда не срабатывал бы.
+ * Атомарно проверяет лимит и засчитывает разрешённую попытку.
+ * Эксклюзивная блокировка охватывает чтение, проверку и запись: параллельные запросы не могут пройти по одному
+ * и тому же значению счётчика. false — лимит уже исчерпан, файл при этом не изменяется.
  */
-function hitRateLimit(string $action, int $decaySeconds = 60): void
+function takeRateLimitAttempt(string $action, int $maxAttempts, int $decaySeconds = 60): bool
 {
-    $path = rateLimitStoragePath($action);
-    $now  = time();
-    $data = ['count' => 1, 'first_at' => $now];
-
-    if (is_file($path)) {
-        $existing = json_decode((string) file_get_contents($path), true);
-        if (
-            is_array($existing)
-            && isset($existing['count'], $existing['first_at'])
-            && $now - (int) $existing['first_at'] <= $decaySeconds
-        ) {
-            $data = ['count' => (int) $existing['count'] + 1, 'first_at' => (int) $existing['first_at']];
-        }
+    if ($maxAttempts < 1 || $decaySeconds < 1) {
+        throw new InvalidArgumentException('Лимит и время окна должны быть положительными.');
     }
 
-    file_put_contents($path, json_encode($data), LOCK_EX);
+    $path = rateLimitStoragePath($action);
+    $handle = fopen($path, 'c+');
+    if ($handle === false) {
+        throw new RuntimeException("Не удалось открыть файл лимита: {$path}");
+    }
+
+    $locked = false;
+    try {
+        if (!flock($handle, LOCK_EX)) {
+            throw new RuntimeException("Не удалось заблокировать файл лимита: {$path}");
+        }
+        $locked = true;
+
+        rewind($handle);
+        $content = stream_get_contents($handle);
+        $existing = is_string($content) ? json_decode($content, true) : null;
+        $now = time();
+        $hasActiveWindow = is_array($existing)
+            && isset($existing['count'], $existing['first_at'])
+            && $now - (int) $existing['first_at'] <= $decaySeconds;
+
+        if ($hasActiveWindow && (int) $existing['count'] >= $maxAttempts) {
+            return false;
+        }
+
+        $data = $hasActiveWindow
+            ? ['count' => (int) $existing['count'] + 1, 'first_at' => (int) $existing['first_at']]
+            : ['count' => 1, 'first_at' => $now];
+        $json = json_encode($data, JSON_THROW_ON_ERROR);
+
+        rewind($handle);
+        if (!ftruncate($handle, 0) || fwrite($handle, $json) !== strlen($json) || !fflush($handle)) {
+            throw new RuntimeException("Не удалось записать файл лимита: {$path}");
+        }
+
+        return true;
+    } finally {
+        if ($locked) {
+            flock($handle, LOCK_UN);
+        }
+        fclose($handle);
+    }
 }
 
 function clearRateLimit(string $action): void

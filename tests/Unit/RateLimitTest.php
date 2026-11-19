@@ -17,14 +17,11 @@ final class RateLimitTest extends TestCase
 
     public function testAllowsUntilLimitReached(): void
     {
-        $this->assertFalse(tooManyAttempts($this->action, 3, 60));
-
-        hitRateLimit($this->action);
-        hitRateLimit($this->action);
-        $this->assertFalse(tooManyAttempts($this->action, 3, 60));
-
-        hitRateLimit($this->action);
-        $this->assertTrue(tooManyAttempts($this->action, 3, 60));
+        $this->assertTrue(takeRateLimitAttempt($this->action, 3, 60));
+        $this->assertTrue(takeRateLimitAttempt($this->action, 3, 60));
+        $this->assertTrue(takeRateLimitAttempt($this->action, 3, 60));
+        $this->assertFalse(takeRateLimitAttempt($this->action, 3, 60));
+        $this->assertFalse(takeRateLimitAttempt($this->action, 3, 60));
     }
 
     public function testCounterRestartsAfterWindowExpires(): void
@@ -34,22 +31,25 @@ final class RateLimitTest extends TestCase
             rateLimitStoragePath($this->action),
             json_encode(['count' => 10, 'first_at' => time() - $decaySeconds - 1])
         );
-        $this->assertFalse(tooManyAttempts($this->action, 3, $decaySeconds));
-
-        hitRateLimit($this->action, $decaySeconds);
-        hitRateLimit($this->action, $decaySeconds);
-        $this->assertFalse(tooManyAttempts($this->action, 3, $decaySeconds));
-
-        hitRateLimit($this->action, $decaySeconds);
-        $this->assertTrue(tooManyAttempts($this->action, 3, $decaySeconds));
+        $this->assertTrue(takeRateLimitAttempt($this->action, 3, $decaySeconds));
+        $this->assertTrue(takeRateLimitAttempt($this->action, 3, $decaySeconds));
+        $this->assertTrue(takeRateLimitAttempt($this->action, 3, $decaySeconds));
+        $this->assertFalse(takeRateLimitAttempt($this->action, 3, $decaySeconds));
     }
 
     public function testClearRateLimitResetsCounter(): void
     {
-        hitRateLimit($this->action);
-        hitRateLimit($this->action);
+        $this->assertTrue(takeRateLimitAttempt($this->action, 1));
+        $this->assertFalse(takeRateLimitAttempt($this->action, 1));
         clearRateLimit($this->action);
 
-        $this->assertFalse(tooManyAttempts($this->action, 1, 60));
+        $this->assertTrue(takeRateLimitAttempt($this->action, 1, 60));
+    }
+
+    public function testRejectsInvalidConfiguration(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        takeRateLimitAttempt($this->action, 0, 60);
     }
 }

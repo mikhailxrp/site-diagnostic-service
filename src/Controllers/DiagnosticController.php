@@ -197,7 +197,7 @@ final class DiagnosticController
             redirect($sourceUrl);
         }
 
-        if (tooManyAttempts(
+        if (!takeRateLimitAttempt(
             self::REPEAT_RATE_LIMIT_ACTION,
             self::REPEAT_RATE_LIMIT_MAX_ATTEMPTS,
             self::REPEAT_RATE_LIMIT_WINDOW_SECONDS
@@ -210,7 +210,6 @@ final class DiagnosticController
             setFlash('error', 'Слишком много повторов подряд. Подождите минуту и попробуйте снова.');
             redirect($sourceUrl);
         }
-        hitRateLimit(self::REPEAT_RATE_LIMIT_ACTION, self::REPEAT_RATE_LIMIT_WINDOW_SECONDS);
 
         try {
             $host = (string) $source['host'];
@@ -255,7 +254,7 @@ final class DiagnosticController
         }
         $diagnosticUrl = '/diagnostics/' . $diagnosticId;
 
-        if (tooManyAttempts(
+        if (!takeRateLimitAttempt(
             self::AI_RERUN_RATE_LIMIT_ACTION,
             self::AI_RERUN_RATE_LIMIT_MAX_ATTEMPTS,
             self::AI_RERUN_RATE_LIMIT_WINDOW_SECONDS
@@ -268,7 +267,6 @@ final class DiagnosticController
             setFlash('error', 'Слишком много перезапусков подряд. Подождите минуту и попробуйте снова.');
             redirect($diagnosticUrl);
         }
-        hitRateLimit(self::AI_RERUN_RATE_LIMIT_ACTION, self::AI_RERUN_RATE_LIMIT_WINDOW_SECONDS);
 
         try {
             $isQueued = queueAiRerun($diagnosticId);
@@ -321,22 +319,25 @@ final class DiagnosticController
     {
         requireCsrf();
 
-        if (tooManyAttempts(self::RATE_LIMIT_ACTION, self::RATE_LIMIT_MAX_ATTEMPTS, self::RATE_LIMIT_WINDOW_SECONDS)) {
+        $form = validateDiagnosticInput($_POST, 'resolveHostIps');
+        if ($form['errors'] !== []) {
+            $this->backToForm($form['values'], $form['errors'], 'Диагностика не запущена: исправьте отмеченные поля.');
+        }
+
+        if (!takeRateLimitAttempt(
+            self::RATE_LIMIT_ACTION,
+            self::RATE_LIMIT_MAX_ATTEMPTS,
+            self::RATE_LIMIT_WINDOW_SECONDS
+        )) {
             logWarning('Превышен лимит запусков диагностики', [
                 'max_attempts'   => self::RATE_LIMIT_MAX_ATTEMPTS,
                 'window_seconds' => self::RATE_LIMIT_WINDOW_SECONDS,
             ]);
             $this->backToForm(
-                readDiagnosticFormValues($_POST),
+                $form['values'],
                 [],
                 'Слишком много запусков подряд. Подождите минуту и попробуйте снова.'
             );
-        }
-        hitRateLimit(self::RATE_LIMIT_ACTION, self::RATE_LIMIT_WINDOW_SECONDS);
-
-        $form = validateDiagnosticInput($_POST, 'resolveHostIps');
-        if ($form['errors'] !== []) {
-            $this->backToForm($form['values'], $form['errors'], 'Диагностика не запущена: исправьте отмеченные поля.');
         }
 
         try {
