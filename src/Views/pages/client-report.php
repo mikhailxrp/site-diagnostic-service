@@ -5,13 +5,17 @@ declare(strict_types=1);
 /**
  * Клиентская версия отчёта.
  * Ожидает: $title, $report (результат buildClientReport() или null),
- * $emptyTitle / $emptyText при $report = null, $technicalUrl — ссылка на технический отчёт или null.
+ * $emptyTitle / $emptyText при $report = null, $technicalUrl — ссылка на технический отчёт или null,
+ * $clientPdfUrl — адрес клиентского PDF или null, $isPdfExport — статичный режим печати.
  */
+
+$isPdfExport = $isPdfExport ?? false;
 
 render('admin/layout/header', [
     'title'          => $title,
     'activeMenu'     => null,
     'showNavigation' => false,
+    'isPdfExport'    => $isPdfExport,
 ]);
 ?>
 <?php if ($report === null) : ?>
@@ -38,12 +42,20 @@ render('admin/layout/header', [
                     <h1 class="page-title text-break"><?= e($report['site']) ?></h1>
                     <div class="text-secondary mt-1">Дата проверки: <?= e($report['date']) ?></div>
                 </div>
-                <?php if ($technicalUrl !== null) : ?>
-                    <div class="col-12 col-sm-auto d-print-none">
-                        <a href="<?= e($technicalUrl) ?>" class="btn btn-outline-secondary btn-lg w-100">
-                            <i class="ti ti-tool icon" aria-hidden="true"></i>
-                            Технический отчёт
-                        </a>
+                <?php if ($technicalUrl !== null || ($clientPdfUrl ?? null) !== null) : ?>
+                    <div class="col-12 col-sm-auto d-flex flex-wrap gap-2 d-print-none">
+                        <?php if (($clientPdfUrl ?? null) !== null) : ?>
+                            <a href="<?= e($clientPdfUrl) ?>" class="btn btn-primary btn-lg">
+                                <i class="ti ti-file-type-pdf icon" aria-hidden="true"></i>
+                                PDF для клиента
+                            </a>
+                        <?php endif; ?>
+                        <?php if ($technicalUrl !== null) : ?>
+                            <a href="<?= e($technicalUrl) ?>" class="btn btn-outline-secondary btn-lg">
+                                <i class="ti ti-tool icon" aria-hidden="true"></i>
+                                Технический отчёт
+                            </a>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
             </div>

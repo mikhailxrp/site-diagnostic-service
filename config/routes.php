@@ -14,6 +14,7 @@ return [
         '/history'                 => ['HistoryController', 'index'],
         '/diagnostics/{id}'        => ['DiagnosticController', 'show'],
         '/diagnostics/{id}/client' => ['DiagnosticController', 'client'],
+        '/diagnostics/{id}/pdf'    => ['ExportController', 'download'],
         '/diagnostics/{id}/status' => ['DiagnosticController', 'status'],
         '/screenshots/{id}'        => ['ScreenshotController', 'show'],
         '/screenshots/{id}/thumb'  => ['ScreenshotController', 'thumb'],

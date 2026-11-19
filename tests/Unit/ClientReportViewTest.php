@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use PHPUnit\Framework\TestCase;
 
 require_once ROOT_PATH . '/src/Services/ClientReportBuilder.php';
+require_once ROOT_PATH . '/src/Services/PdfService.php';
 
 final class ClientReportViewTest extends TestCase
 {
@@ -110,6 +111,94 @@ final class ClientReportViewTest extends TestCase
         $this->assertArrayNotHasKey('/diagnostics/{id}/client', $routes['POST']);
     }
 
+    public function testPdfButtonsRenderOnlyWithReportUrls(): void
+    {
+        $withLinks = $this->renderDiagnosticView('/diagnostics/17/client', '/diagnostics/17/pdf?version=full');
+        $withoutLinks = $this->renderDiagnosticView(null);
+
+        $this->assertStringContainsString('PDF полный', $withLinks);
+        $this->assertStringContainsString('href="/diagnostics/17/pdf?version=full"', $withLinks);
+        $this->assertStringNotContainsString('PDF полный', $withoutLinks);
+
+        $report = buildClientReport(
+            ['host' => 'shop.test', 'status' => 'done', 'created_at' => '2026-11-18 12:00:00'],
+            []
+        );
+        $client = $this->renderClientView($report);
+        $empty = $this->renderClientView(null, 'Отчёт не найден', 'Нет данных.');
+
+        $this->assertStringContainsString('PDF для клиента', $client);
+        $this->assertStringContainsString('href="/diagnostics/17/pdf?version=client"', $client);
+        $this->assertStringNotContainsString('PDF для клиента', $empty);
+    }
+
+    public function testClientPdfModeHasNoNavigationButtonsOrScripts(): void
+    {
+        $report = buildClientReport(
+            ['host' => 'shop.test', 'status' => 'failed', 'created_at' => '2026-11-18 12:00:00'],
+            [['category' => 'speed', 'severity' => 'medium', 'client_text' => null]]
+        );
+        $html = renderPdfView('pages/client-report', [
+            'title' => 'Отчёт для клиента',
+            'report' => $report,
+            'technicalUrl' => null,
+            'clientPdfUrl' => null,
+        ]);
+
+        $this->assertStringContainsString('class="pdf-export"', $html);
+        $this->assertStringContainsString('/assets/css/print.css', $html);
+        $this->assertStringContainsString('Отчёт неполный', $html);
+        $this->assertStringNotContainsString('<script', $html);
+        $this->assertStringNotContainsString('<button', $html);
+        $this->assertStringNotContainsString('navbar', $html);
+        $this->assertStringNotContainsString('PDF для клиента', $html);
+        $this->assertStringNotContainsString('Технический отчёт', $html);
+    }
+
+    public function testFullPdfModeExpandsFindingsAndRemovesInteractiveElements(): void
+    {
+        $html = $this->renderDiagnosticView(null, null, true, true);
+
+        $this->assertStringContainsString('Полный технический отчёт', $html);
+        $this->assertStringContainsString('Дата проверки: 2026-11-18 12:00:00', $html);
+        $this->assertStringContainsString('По серьёзности', $html);
+        $this->assertStringContainsString('По страницам', $html);
+        $this->assertStringContainsString('Опасная находка', $html);
+        $this->assertStringNotContainsString('Ход диагностики', $html);
+        $this->assertStringNotContainsString('nav-tabs', $html);
+        $this->assertStringNotContainsString('tab-pane', $html);
+        $this->assertStringNotContainsString('data-bs-toggle="tab"', $html);
+        $this->assertStringNotContainsString('<script', $html);
+        $this->assertStringNotContainsString('<form', $html);
+        $this->assertStringNotContainsString('PDF полный', $html);
+    }
+
+    public function testPdfGalleryUsesFullImagesWithoutButtonsModalsOrThumbnails(): void
+    {
+        $html = renderPdfView('components/screenshot-gallery', [
+            'gallery' => [
+                'screenshots' => [[
+                    'url' => '/screenshots/11',
+                    'thumbUrl' => '/screenshots/11/thumb',
+                    'alt' => 'Главная, 360 px',
+                    'thumbAlt' => 'Главная, 360 px, миниатюра',
+                    'caption' => '360 px',
+                    'modalId' => 'screenshot-home-11',
+                ]],
+                'screenshotsEmpty' => 'Скриншотов нет.',
+                'screenshotsNote' => null,
+            ],
+        ]);
+
+        $this->assertStringContainsString('src="/screenshots/11"', $html);
+        $this->assertStringContainsString('<figcaption', $html);
+        $this->assertStringContainsString('Главная, 360 px', $html);
+        $this->assertStringNotContainsString('/thumb', $html);
+        $this->assertStringNotContainsString('<button', $html);
+        $this->assertStringNotContainsString('modal', $html);
+        $this->assertStringNotContainsString('loading="lazy"', $html);
+    }
+
     private function renderClientView(?array $report, string $emptyTitle = '', string $emptyText = ''): string
     {
         ob_start();
@@ -119,13 +208,18 @@ final class ClientReportViewTest extends TestCase
             'emptyTitle'   => $emptyTitle,
             'emptyText'    => $emptyText,
             'technicalUrl' => $report !== null ? '/diagnostics/17' : null,
+            'clientPdfUrl' => $report !== null ? '/diagnostics/17/pdf?version=client' : null,
         ]);
 
         return (string) ob_get_clean();
     }
 
-    private function renderDiagnosticView(?string $clientReportUrl): string
-    {
+    private function renderDiagnosticView(
+        ?string $clientReportUrl,
+        ?string $fullPdfUrl = null,
+        bool $pdfExport = false,
+        bool $withFindings = false
+    ): string {
         $report = [
             'partial'           => false,
             'productUrl'        => null,
@@ -147,6 +241,31 @@ final class ClientReportViewTest extends TestCase
             'aiSummary'         => null,
             'aiSpending'        => null,
         ];
+
+        if ($withFindings) {
+            $finding = [
+                'anchorId' => 'finding-1',
+                'badgeClass' => 'bg-red-lt',
+                'severityLabel' => 'Высокая',
+                'categoryLabel' => 'SEO',
+                'title' => 'Опасная находка',
+                'location' => null,
+                'line' => null,
+                'widths' => null,
+                'pageUrl' => null,
+                'pageUrls' => [],
+                'details' => null,
+                'evidenceJson' => null,
+            ];
+            $report['findingCount'] = 1;
+            $report['findingGroups'] = [[
+                'label' => 'Высокая', 'count' => 1, 'badgeClass' => 'bg-red-lt', 'items' => [$finding],
+            ]];
+            $report['findingPageGroups'] = [[
+                'title' => 'Сайт целиком', 'count' => 1, 'url' => null, 'blocked' => null, 'items' => [$finding],
+            ]];
+        }
+
         $diagnostic = [
             'id'           => 17,
             'url'          => 'https://shop.test/',
@@ -158,9 +277,7 @@ final class ClientReportViewTest extends TestCase
             'isFinished'   => true,
             'steps'        => [],
         ];
-
-        ob_start();
-        render('pages/diagnostic', [
+        $data = [
             'title'           => 'Диагностика #17',
             'activeMenu'      => 'new',
             'diagnostic'      => $diagnostic,
@@ -170,7 +287,16 @@ final class ClientReportViewTest extends TestCase
             'reportError'     => false,
             'aiRerunUrl'      => null,
             'clientReportUrl' => $clientReportUrl,
-        ]);
+            'fullPdfUrl'      => $fullPdfUrl,
+            'printDate'       => '2026-11-18 12:00:00',
+        ];
+
+        if ($pdfExport) {
+            return renderPdfView('pages/diagnostic', $data);
+        }
+
+        ob_start();
+        render('pages/diagnostic', $data);
 
         return (string) ob_get_clean();
     }

@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 /**
- * Скриншоты страницы: миниатюры по ширинам, крупно — модальное окно Tabler.
+ * Скриншоты страницы: на экране — миниатюры и модальные окна, для PDF — полноразмерные статичные изображения.
  * Ожидает: $gallery (строка из buildReportPages(): screenshots, screenshotsEmpty, screenshotsNote).
  */
+
+$isPdfExport = $isPdfExport ?? !empty($GLOBALS['pdfExportMode']);
 ?>
 <?php if ($gallery['screenshots'] === []) : ?>
     <div class="text-secondary small mt-2">
@@ -14,6 +16,18 @@ declare(strict_types=1);
             <span class="text-break"><?= e($gallery['screenshotsNote']) ?></span>
         <?php endif; ?>
     </div>
+<?php elseif ($isPdfExport) : ?>
+    <ul class="pdf-screenshot-gallery" aria-label="Скриншоты страницы">
+        <?php foreach ($gallery['screenshots'] as $screenshot) : ?>
+            <li>
+                <figure class="pdf-screenshot">
+                    <img src="<?= e($screenshot['url']) ?>" alt="<?= e($screenshot['alt']) ?>"
+                         class="pdf-screenshot-image">
+                    <figcaption class="pdf-screenshot-caption"><?= e($screenshot['alt']) ?></figcaption>
+                </figure>
+            </li>
+        <?php endforeach; ?>
+    </ul>
 <?php else : ?>
     <ul class="row g-2 list-unstyled mt-2 mb-0" aria-label="Скриншоты страницы">
         <?php foreach ($gallery['screenshots'] as $screenshot) : ?>

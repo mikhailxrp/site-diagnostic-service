@@ -168,4 +168,31 @@ final class BrowserServiceTest extends TestCase
         $this->assertDirectoryExists($fresh);
         $this->assertDirectoryExists($other);
     }
+
+    public function testPdfPrintOptions(): void
+    {
+        $options = buildBrowserPdfOptions();
+
+        $this->assertFalse($options['landscape']);
+        $this->assertTrue($options['printBackground']);
+        $this->assertTrue($options['preferCSSPageSize']);
+        $this->assertFalse($options['displayHeaderFooter']);
+        $this->assertSame(BROWSER_PDF_PAPER_WIDTH_INCHES, $options['paperWidth']);
+        $this->assertSame(BROWSER_PDF_PAPER_HEIGHT_INCHES, $options['paperHeight']);
+        $this->assertSame(8.27, $options['paperWidth']);
+        $this->assertSame(11.69, $options['paperHeight']);
+        $this->assertSame(BROWSER_PDF_MARGIN_INCHES, $options['marginTop']);
+        $this->assertSame(BROWSER_PDF_MARGIN_INCHES, $options['marginBottom']);
+        $this->assertSame(BROWSER_PDF_MARGIN_INCHES, $options['marginLeft']);
+        $this->assertSame(BROWSER_PDF_MARGIN_INCHES, $options['marginRight']);
+        $this->assertSame(30, BROWSER_PDF_STARTUP_TIMEOUT_SECONDS);
+        $this->assertSame(30000, BROWSER_PDF_PAGE_TIMEOUT_MS);
+        $this->assertSame(60000, BROWSER_PDF_PRINT_TIMEOUT_MS);
+    }
+
+    public function testPdfPrintRejectsExternalUrlBeforeChromeLaunch(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        printBrowserHtmlToPdf('missing-chrome.exe', 'https://example.test/report', $this->baseDir . '/out.pdf', 1);
+    }
 }

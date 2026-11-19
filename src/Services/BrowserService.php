@@ -34,6 +34,14 @@ const BROWSER_VIEWPORT_WIDTHS         = [360, 768, 1366]; // каждая стр
 const BROWSER_MOBILE_MAX_WIDTH        = 767;   // уже — мобильная эмуляция: учитывается <meta viewport>
 const BROWSER_SETTLE_MS               = 2000;  // после `load` ловим ошибки таймеров и отложенных скриптов
 
+const BROWSER_PDF_STARTUP_TIMEOUT_SECONDS = 30;
+const BROWSER_PDF_PAGE_TIMEOUT_MS         = 30000;
+const BROWSER_PDF_PRINT_TIMEOUT_MS        = 60000;
+const BROWSER_PDF_TIME_LIMIT_SECONDS      = 120;
+const BROWSER_PDF_PAPER_WIDTH_INCHES      = 8.27;
+const BROWSER_PDF_PAPER_HEIGHT_INCHES     = 11.69;
+const BROWSER_PDF_MARGIN_INCHES           = 0;
+
 /** События DevTools, которые собираются при загрузке (Network и Runtime включает `chrome-php`, Log — мы) */
 const BROWSER_COLLECTED_EVENTS = [
     'Network.requestWillBeSent',
@@ -524,6 +532,60 @@ function checkChrome(string $chromePath): array
 
         return ['ok' => false, 'message' => 'Chrome запустился, но не ответил на запрос версии.'];
     } finally {
+        closeBrowser($session);
+    }
+}
+
+/**
+ * Параметры Page.printToPDF: A4, фоны и размер страницы из print.css.
+ *
+ * @return array<string, bool|int|float>
+ */
+function buildBrowserPdfOptions(): array
+{
+    return [
+        'landscape'           => false,
+        'printBackground'     => true,
+        'displayHeaderFooter' => false,
+        'paperWidth'          => BROWSER_PDF_PAPER_WIDTH_INCHES,
+        'paperHeight'         => BROWSER_PDF_PAPER_HEIGHT_INCHES,
+        'marginTop'           => BROWSER_PDF_MARGIN_INCHES,
+        'marginBottom'        => BROWSER_PDF_MARGIN_INCHES,
+        'marginLeft'          => BROWSER_PDF_MARGIN_INCHES,
+        'marginRight'         => BROWSER_PDF_MARGIN_INCHES,
+        'preferCSSPageSize'   => true,
+    ];
+}
+
+/**
+ * Печатает только file:// HTML в новом профиле. Вкладка, Chrome и профиль закрываются при любом исходе.
+ */
+function printBrowserHtmlToPdf(string $chromePath, string $htmlUri, string $pdfPath, int $ownerId): void
+{
+    if (!str_starts_with($htmlUri, 'file://')) {
+        throw new InvalidArgumentException('PDF можно печатать только из локального HTML-файла.');
+    }
+
+    set_time_limit(BROWSER_PDF_TIME_LIMIT_SECONDS);
+    $session = launchBrowser($chromePath, $ownerId, BROWSER_PDF_STARTUP_TIMEOUT_SECONDS);
+    $page = null;
+
+    try {
+        $page = $session['browser']->createPage();
+        $navigation = navigateBrowserPage($page, $htmlUri, BROWSER_PDF_PAGE_TIMEOUT_MS);
+        if ($navigation['status'] !== BROWSER_PAGE_OPENED) {
+            throw new RuntimeException('Локальный HTML не загрузился: ' . ($navigation['error'] ?? 'неизвестная ошибка'));
+        }
+
+        $page->pdf(buildBrowserPdfOptions())->saveToFile($pdfPath, BROWSER_PDF_PRINT_TIMEOUT_MS);
+    } finally {
+        if ($page !== null) {
+            try {
+                $page->close();
+            } catch (Throwable $e) {
+                logException($e, ['service' => 'browser', 'action' => 'close_pdf_page']);
+            }
+        }
         closeBrowser($session);
     }
 }

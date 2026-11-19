@@ -7,10 +7,17 @@ declare(strict_types=1);
  * по завершении страница перезагружается и отчёт выводит сервер.
  * Ожидает: $title, $activeMenu, $diagnostic (результат buildDiagnosticStatus() или null — не найдена / ошибка),
  * $statusUrl, $hasReport, $report (результат buildReport() или null), $reportError (если $diagnostic есть),
- * $emptyText (если $diagnostic = null).
+ * $emptyText (если $diagnostic = null), $fullPdfUrl — адрес полного PDF или null,
+ * $isPdfExport — статичный режим печати, $printDate — дата диагностики для печатной шапки.
  */
 
-render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
+$isPdfExport = $isPdfExport ?? false;
+
+render('admin/layout/header', [
+    'title' => $title,
+    'activeMenu' => $activeMenu,
+    'isPdfExport' => $isPdfExport,
+]);
 ?>
 <?php if ($diagnostic === null) : ?>
     <div class="page-body">
@@ -34,6 +41,12 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                     <h1 class="page-title text-break"><?= e($diagnostic['url']) ?></h1>
                 </div>
                 <div class="col-12 col-sm-auto d-flex flex-wrap align-items-center gap-2">
+                    <?php if (($fullPdfUrl ?? null) !== null) : ?>
+                        <a href="<?= e($fullPdfUrl) ?>" class="btn btn-outline-primary btn-lg">
+                            <i class="ti ti-file-type-pdf icon" aria-hidden="true"></i>
+                            PDF полный
+                        </a>
+                    <?php endif; ?>
                     <?php if (($clientReportUrl ?? null) !== null) : ?>
                         <a href="<?= e($clientReportUrl) ?>" class="btn btn-outline-primary btn-lg">
                             <i class="ti ti-file-description icon" aria-hidden="true"></i>
@@ -45,13 +58,21 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
             </div>
         </div>
     </div>
+    <header class="pdf-report-header pdf-print-only">
+        <div class="container-xl">
+            <div class="page-pretitle">Полный технический отчёт</div>
+            <h1 class="page-title text-break"><?= e($diagnostic['url']) ?></h1>
+            <div class="text-secondary mt-1">Дата проверки: <?= e($printDate ?? '') ?></div>
+        </div>
+    </header>
     <div class="page-body">
         <div class="container-xl">
             <div class="row row-cards" data-diagnostic
                  data-status-url="<?= e($statusUrl) ?>"
                  data-finished="<?= $diagnostic['isFinished'] ? '1' : '0' ?>">
+                <?php if (!$isPdfExport) : ?>
                 <div class="col-12">
-                    <section class="card" aria-labelledby="diagnostic-progress-title">
+                    <section class="card d-print-none" aria-labelledby="diagnostic-progress-title">
                         <div class="card-header">
                             <h2 class="card-title" id="diagnostic-progress-title">Ход диагностики</h2>
                             <div class="card-actions">
@@ -83,6 +104,7 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                         </ul>
                     </section>
                 </div>
+                <?php endif; ?>
                 <div class="col-12" data-result-failed<?= $diagnostic['status'] === 'failed' ? '' : ' hidden' ?>>
                     <div class="alert alert-danger mb-0" role="alert">
                         <div class="alert-icon"><i class="ti ti-alert-triangle icon" aria-hidden="true"></i></div>
@@ -590,20 +612,25 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                             </div>
                                         </div>
                                     <?php else : ?>
-                                        <div class="card-header">
-                                            <ul class="nav nav-tabs card-header-tabs" data-bs-toggle="tabs" role="tablist">
-                                                <li class="nav-item" role="presentation">
-                                                    <a href="#findings-by-severity" class="nav-link py-3 active" data-bs-toggle="tab"
-                                                       role="tab" aria-controls="findings-by-severity" aria-selected="true">По серьёзности</a>
-                                                </li>
-                                                <li class="nav-item" role="presentation">
-                                                    <a href="#findings-by-page" class="nav-link py-3" data-bs-toggle="tab"
-                                                       role="tab" aria-controls="findings-by-page" aria-selected="false" tabindex="-1">По страницам</a>
-                                                </li>
-                                            </ul>
-                                        </div>
-                                        <div class="tab-content">
-                                            <div class="tab-pane active show" id="findings-by-severity" role="tabpanel">
+                                        <?php if (!$isPdfExport) : ?>
+                                            <div class="card-header">
+                                                <ul class="nav nav-tabs card-header-tabs" data-bs-toggle="tabs" role="tablist">
+                                                    <li class="nav-item" role="presentation">
+                                                        <a href="#findings-by-severity" class="nav-link py-3 active" data-bs-toggle="tab"
+                                                           role="tab" aria-controls="findings-by-severity" aria-selected="true">По серьёзности</a>
+                                                    </li>
+                                                    <li class="nav-item" role="presentation">
+                                                        <a href="#findings-by-page" class="nav-link py-3" data-bs-toggle="tab"
+                                                           role="tab" aria-controls="findings-by-page" aria-selected="false" tabindex="-1">По страницам</a>
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                        <?php endif; ?>
+                                        <div class="<?= $isPdfExport ? 'pdf-findings-groups' : 'tab-content' ?>">
+                                            <div class="<?= $isPdfExport ? 'pdf-findings-group' : 'tab-pane active show' ?>" id="findings-by-severity"<?= $isPdfExport ? '' : ' role="tabpanel"' ?>>
+                                                <?php if ($isPdfExport) : ?>
+                                                    <h3 class="pdf-group-title">По серьёзности</h3>
+                                                <?php endif; ?>
                                                 <?php foreach ($report['findingGroups'] as $findingGroup) : ?>
                                                     <ul class="list-group list-group-flush">
                                                         <li class="list-group-header d-flex align-items-center gap-2" role="heading" aria-level="3">
@@ -616,7 +643,10 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
                                                     </ul>
                                                 <?php endforeach; ?>
                                             </div>
-                                            <div class="tab-pane" id="findings-by-page" role="tabpanel">
+                                            <div class="<?= $isPdfExport ? 'pdf-findings-group' : 'tab-pane' ?>" id="findings-by-page"<?= $isPdfExport ? '' : ' role="tabpanel"' ?>>
+                                                <?php if ($isPdfExport) : ?>
+                                                    <h3 class="pdf-group-title">По страницам</h3>
+                                                <?php endif; ?>
                                                 <?php foreach ($report['findingPageGroups'] as $pageGroup) : ?>
                                                     <ul class="list-group list-group-flush">
                                                         <li class="list-group-header d-flex flex-wrap align-items-center gap-2" role="heading" aria-level="3">
@@ -680,6 +710,8 @@ render('admin/layout/header', ['title' => $title, 'activeMenu' => $activeMenu]);
             </div>
         </div>
     </div>
-    <script type="module" src="/assets/js/diagnostic-progress.js"></script>
+    <?php if (!$isPdfExport) : ?>
+        <script type="module" src="/assets/js/diagnostic-progress.js"></script>
+    <?php endif; ?>
 <?php endif; ?>
 <?php render('admin/layout/footer'); ?>

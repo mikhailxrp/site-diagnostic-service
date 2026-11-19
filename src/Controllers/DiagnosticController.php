@@ -89,6 +89,10 @@ final class DiagnosticController
             'clientReportUrl' => $report !== null
                 ? '/diagnostics/' . $diagnostic['id'] . '/client'
                 : null,
+            'fullPdfUrl' => $report !== null
+                ? '/diagnostics/' . $diagnostic['id'] . '/pdf?version=full'
+                : null,
+            'printDate' => (string) ($row['created_at'] ?? ''),
         ]);
     }
 
@@ -149,6 +153,7 @@ final class DiagnosticController
             'title'        => 'Отчёт для клиента',
             'report'       => $report,
             'technicalUrl' => '/diagnostics/' . $diagnosticId,
+            'clientPdfUrl' => '/diagnostics/' . $diagnosticId . '/pdf?version=client',
         ]);
     }
 
