@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use DiagnosticNoLongerRunningException;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -271,5 +272,55 @@ final class OutdatedCheckTest extends TestCase
         $this->assertSame('done', $empty['status']);
         $this->assertSame([], $empty['findings']);
         $this->assertNull($empty['facts']['databases']['latest_versions']['updated_at']);
+    }
+
+    public function testEolBelowDoesNotFalseTriggerOnShorterZeroVersion(): void
+    {
+        $result = $this->check([['key' => 'joomla', 'category' => 'cms', 'name' => 'Joomla', 'version' => '5.0']]);
+
+        $this->assertCount(1, $result['findings']);
+        $finding = $result['findings'][0];
+        $this->assertFalse($finding['evidence']['unsupported']);
+        $this->assertSame(OUTDATED_SEVERITY['cms']['outdated'], $finding['severity']);
+    }
+
+    public function testPluginLookupsAreCappedWhileFreshCacheDoesNotSpendQuota(): void
+    {
+        // Два плагина уже в свежем кэше — они не должны тратить лимит 30 онлайн-запросов
+        saveDatabaseFile($this->cacheDir . '/cached-one.json', [
+            'fetched_at' => self::NOW - 60, 'status' => 'found', 'version' => '3.0.0',
+        ]);
+        saveDatabaseFile($this->cacheDir . '/cached-two.json', [
+            'fetched_at' => self::NOW - 60, 'status' => 'found', 'version' => '2.0.0',
+        ]);
+
+        $items = [
+            ['category' => 'plugin', 'parent' => 'wordpress', 'name' => 'cached-one', 'version' => '1.0.0'],
+            ['category' => 'plugin', 'parent' => 'wordpress', 'name' => 'cached-two', 'version' => '2.0.0'],
+        ];
+        $plugins = [];
+        for ($i = 1; $i <= 40; $i++) {
+            $slug = 'plugin-' . $i;
+            $items[] = ['category' => 'plugin', 'parent' => 'wordpress', 'name' => $slug, 'version' => '1.0.0'];
+            $plugins[$slug] = ['body' => '{"slug":"' . $slug . '","version":"2.0.0"}'];
+        }
+
+        $result = $this->check($items, $plugins);
+
+        $this->assertCount(WP_PLUGIN_LOOKUP_MAX_PER_DIAGNOSTIC, $this->requested);
+        $this->assertSame(10, $result['facts']['plugin_lookups_skipped']);
+        $this->assertStringContainsString('пропущено по лимиту онлайн-проверки плагинов: 10', $result['message']);
+        // 2 предсозданных файла + 30 новых файлов кэша
+        $this->assertCount(WP_PLUGIN_LOOKUP_MAX_PER_DIAGNOSTIC + 2, glob($this->cacheDir . '/*.json') ?: []);
+        // 1 находка из кэша + 30 находок из онлайна
+        $this->assertCount(WP_PLUGIN_LOOKUP_MAX_PER_DIAGNOSTIC + 1, $result['findings']);
+    }
+
+    public function testNoLongerRunningExceptionPropagatesFromPluginRequest(): void
+    {
+        $item = ['category' => 'plugin', 'parent' => 'wordpress', 'name' => 'contact-form-7', 'version' => '5.1.0'];
+
+        $this->expectException(DiagnosticNoLongerRunningException::class);
+        $this->check([$item], ['contact-form-7' => new DiagnosticNoLongerRunningException(11)]);
     }
 }

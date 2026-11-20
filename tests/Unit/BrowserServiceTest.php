@@ -4,8 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use ErrorException;
+use HeadlessChromium\Browser;
+use HeadlessChromium\Communication\Connection;
+use HeadlessChromium\Communication\Socket\MockSocket;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 require_once ROOT_PATH . '/src/Core/Logger.php';
 require_once ROOT_PATH . '/src/Services/FindingFactory.php';
@@ -45,7 +50,19 @@ final class BrowserServiceTest extends TestCase
         $this->assertSame(30, $options['startupTimeout']);
         $this->assertTrue($options['ignoreCertificateErrors']);
         $this->assertFalse($options['keepAlive']);
+        $this->assertSame([BROWSER_DISABLE_POPUP_BLOCKING_SWITCH], $options['excludedSwitches']);
+        $this->assertSame([BROWSER_BLOCK_NEW_CONTENTS_FLAG], $options['customFlags']);
         $this->assertArrayNotHasKey('userAgent', $options);
+
+        $merged = buildBrowserOptions('C:/temp/chrome-1-ab', 30, [
+            'excludedSwitches' => [BROWSER_DISABLE_POPUP_BLOCKING_SWITCH, '--mute-audio'],
+            'customFlags'      => [BROWSER_BLOCK_NEW_CONTENTS_FLAG, '--disable-dev-shm-usage'],
+            ...buildBrowserPdfLaunchOptions(),
+        ]);
+        $this->assertTrue($merged['disableJavascript']);
+        $this->assertFalse($merged['ignoreCertificateErrors']);
+        $this->assertSame([BROWSER_DISABLE_POPUP_BLOCKING_SWITCH, '--mute-audio'], $merged['excludedSwitches']);
+        $this->assertSame([BROWSER_BLOCK_NEW_CONTENTS_FLAG, '--disable-dev-shm-usage'], $merged['customFlags']);
     }
 
     public function testParseBrowserVersion(): void
@@ -190,9 +207,315 @@ final class BrowserServiceTest extends TestCase
         $this->assertSame(60000, BROWSER_PDF_PRINT_TIMEOUT_MS);
     }
 
-    public function testPdfPrintRejectsExternalUrlBeforeChromeLaunch(): void
+    public function testPdfPrintRejectsExternalAndUnsafeFileUrlsBeforeChromeLaunch(): void
     {
-        $this->expectException(InvalidArgumentException::class);
-        printBrowserHtmlToPdf('missing-chrome.exe', 'https://example.test/report', $this->baseDir . '/out.pdf', 1);
+        foreach ([
+            'https://example.test/report',
+            'file://127.0.0.1/c$/report.html',
+            'file:///C:/dir/../../etc/passwd',
+        ] as $url) {
+            try {
+                printBrowserHtmlToPdf('missing-chrome.exe', $url, $this->baseDir . '/out.pdf', 1);
+                $this->fail('Ожидалось отклонение адреса: ' . $url);
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function testGetBrowserProfileModifiedTimeReturnsNullForMissingPathWithoutWarning(): void
+    {
+        set_error_handler(static function (int $errno, string $errstr, string $errfile, int $errline): bool {
+            throw new ErrorException($errstr, 0, $errno, $errfile, $errline);
+        });
+        try {
+            $this->assertNull(getBrowserProfileModifiedTime($this->baseDir . '/chrome-gone-1234'));
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    public function testRequestInterceptionCoversChildTargetsPopupsFailClosedAndNoFetchDisable(): void
+    {
+        $socket = $this->createFakeCdpSocket();
+        $connection = new Connection($socket);
+        $connection->connect();
+        $browser = new Browser($connection);
+        $page = $browser->createPage();
+        $mainSession = $page->getSession();
+        $mainSessionId = $mainSession->getSessionId();
+
+        $errors = [];
+        $cleanup = attachBrowserRequestInterception(
+            $page,
+            static function (array $params): bool {
+                $url = (string) ($params['request']['url'] ?? '');
+                if (str_contains($url, 'explode')) {
+                    throw new RuntimeException('guard failed');
+                }
+
+                return str_starts_with($url, 'https://shop.test/');
+            },
+            static function (\Throwable $e) use (&$errors): void {
+                $errors[] = $e->getMessage();
+            }
+        );
+
+        $sent = $this->decodeSentMessages($socket->getSentData());
+        $methods = array_column($sent, 'method');
+        $this->assertContains('Network.setBypassServiceWorker', $methods);
+        $this->assertContains('Fetch.enable', $methods);
+        $this->assertContains('Target.setAutoAttach', $methods);
+
+        // Разрешённый, запрещённый и аварийный запросы на основной вкладке
+        $socket->flushData();
+        $mainSession->emit('method:Fetch.requestPaused', [[
+            'requestId'    => 'req-ok',
+            'resourceType' => 'Document',
+            'request'      => ['url' => 'https://shop.test/catalog', 'method' => 'GET'],
+        ]]);
+        $mainSession->emit('method:Fetch.requestPaused', [[
+            'requestId'    => 'req-local',
+            'resourceType' => 'XHR',
+            'request'      => ['url' => 'http://127.0.0.1/settings', 'method' => 'GET'],
+        ]]);
+        $mainSession->emit('method:Fetch.requestPaused', [[
+            'requestId'    => 'req-boom',
+            'resourceType' => 'XHR',
+            'request'      => ['url' => 'https://explode.test/', 'method' => 'GET'],
+        ]]);
+
+        // Дочерняя цель (iframe) с waitingForDebugger: true + перехват внутри неё
+        $mainSession->emit('method:Target.attachedToTarget', [[
+            'sessionId'          => 'child-sess-1',
+            'waitingForDebugger' => true,
+            'targetInfo'         => ['targetId' => 'iframe-1', 'type' => 'iframe'],
+        ]]);
+        $socket->addReceivedData(json_encode([
+            'method'    => 'Fetch.requestPaused',
+            'sessionId' => 'child-sess-1',
+            'params'    => [
+                'requestId'    => 'req-child-local',
+                'resourceType' => 'Document',
+                'request'      => ['url' => 'http://192.168.0.1/admin', 'method' => 'GET'],
+            ],
+        ], JSON_THROW_ON_ERROR));
+        $connection->readData();
+
+        // Всплывающее окно закрывается через Target.closeTarget
+        $connection->emit(Connection::EVENT_TARGET_CREATED, [[
+            'targetInfo' => ['targetId' => 'popup-99', 'type' => 'page', 'url' => 'https://evil.test/'],
+        ]]);
+
+        $after = $this->decodeSentMessages($socket->getSentData());
+        $this->assertSame(['guard failed'], $errors);
+
+        $this->assertNotNull($this->findSentMessage($after, 'Fetch.continueRequest', $mainSessionId, ['requestId' => 'req-ok']));
+        $this->assertNotNull($this->findSentMessage($after, 'Fetch.failRequest', $mainSessionId, [
+            'requestId'   => 'req-local',
+            'errorReason' => BROWSER_BLOCK_REASON,
+        ]));
+        $this->assertNotNull($this->findSentMessage($after, 'Fetch.failRequest', $mainSessionId, [
+            'requestId'   => 'req-boom',
+            'errorReason' => BROWSER_BLOCK_REASON,
+        ]));
+        $this->assertNotNull($this->findSentMessage($after, 'Fetch.enable', 'child-sess-1'));
+        $this->assertNotNull($this->findSentMessage($after, 'Network.setBypassServiceWorker', 'child-sess-1'));
+        $this->assertNotNull($this->findSentMessage($after, 'Target.setAutoAttach', 'child-sess-1'));
+        $this->assertNotNull($this->findSentMessage($after, 'Runtime.runIfWaitingForDebugger', 'child-sess-1'));
+        $this->assertNotNull($this->findSentMessage($after, 'Fetch.failRequest', 'child-sess-1', [
+            'requestId'   => 'req-child-local',
+            'errorReason' => BROWSER_BLOCK_REASON,
+        ]));
+        $this->assertNotNull($this->findSentMessage($after, 'Target.closeTarget', null, ['targetId' => 'popup-99']));
+
+        $socket->flushData();
+        $cleanup();
+        $afterCleanup = $this->decodeSentMessages($socket->getSentData());
+        $this->assertNull($this->findSentMessage($afterCleanup, 'Fetch.disable'));
+    }
+
+    public function testOpenBrowserPageBlocksInitialLocalUrlWithoutCreatingPage(): void
+    {
+        $socket = $this->createFakeCdpSocket();
+        $connection = new Connection($socket);
+        $connection->connect();
+        $browser = new Browser($connection);
+        $socket->flushData();
+
+        $result = openBrowserPage(
+            $browser,
+            'http://127.0.0.1/settings',
+            1366,
+            1000,
+            true,
+            static fn (): array => ['127.0.0.1']
+        );
+
+        $this->assertSame(BROWSER_PAGE_ERROR, $result['status']);
+        $this->assertSame(BROWSER_SSRF_BLOCKED_ERROR, $result['error']);
+        $this->assertArrayNotHasKey('screenshot', $result);
+        $this->assertSame([], $socket->getSentData(), 'для запрещённого URL вкладка даже не создаётся');
+    }
+
+    public function testOpenBrowserPageAbortsAndSkipsScreenshotOnBlockedMainRedirect(): void
+    {
+        $socket = $this->createFakeCdpSocket(static function (array $msg, MockSocket $sock): void {
+            if (($msg['method'] ?? '') !== 'Page.navigate') {
+                return;
+            }
+            $sock->addReceivedData(json_encode([
+                'method'    => 'Fetch.requestPaused',
+                'sessionId' => $msg['sessionId'] ?? null,
+                'params'    => [
+                    'requestId'    => 'nav-redirect-1',
+                    'resourceType' => BROWSER_DOCUMENT_TYPE,
+                    'frameId'      => 'frame-1',
+                    'request'      => ['url' => 'http://127.0.0.1/secret', 'method' => 'GET'],
+                ],
+            ], JSON_THROW_ON_ERROR));
+        });
+        $connection = new Connection($socket);
+        $connection->connect();
+        $browser = new Browser($connection);
+
+        $result = openBrowserPage(
+            $browser,
+            'https://shop.test/redirect',
+            1366,
+            5000,
+            true,
+            static fn (string $host): array => $host === 'shop.test' ? ['93.184.216.34'] : ['127.0.0.1']
+        );
+
+        $this->assertSame(BROWSER_PAGE_ERROR, $result['status']);
+        $this->assertSame(BROWSER_SSRF_BLOCKED_ERROR, $result['error']);
+        $this->assertArrayNotHasKey('screenshot', $result);
+
+        $sent = $this->decodeSentMessages($socket->getSentData());
+        $this->assertNotNull($this->findSentMessage($sent, 'Fetch.failRequest', 'session-1', [
+            'requestId'   => 'nav-redirect-1',
+            'errorReason' => BROWSER_BLOCK_REASON,
+        ]));
+        $this->assertNull($this->findSentMessage($sent, 'Fetch.disable'));
+    }
+
+    /**
+     * @param callable(array<string, mixed>, MockSocket): void|null $onSend
+     */
+    private function createFakeCdpSocket(?callable $onSend = null): MockSocket
+    {
+        return new class ($onSend) extends MockSocket {
+            /** @var callable|null */
+            private $onSend;
+
+            public function __construct(?callable $onSend)
+            {
+                $this->onSend = $onSend;
+            }
+
+            public function sendData($data)
+            {
+                if (!$this->isConnected()) {
+                    return false;
+                }
+                $this->sentData[] = $data;
+                $decoded = json_decode($data, true);
+                if (!is_array($decoded) || !isset($decoded['id'])) {
+                    return true;
+                }
+
+                $method = (string) ($decoded['method'] ?? '');
+                $id = (int) $decoded['id'];
+                $result = match ($method) {
+                    'Target.createTarget' => ['targetId' => 'target-1'],
+                    'Target.attachToTarget' => ['sessionId' => 'session-1'],
+                    'Page.getFrameTree' => ['frameTree' => ['frame' => [
+                        'id'       => 'frame-1',
+                        'loaderId' => 'loader-0',
+                        'url'      => 'about:blank',
+                    ]]],
+                    'Page.navigate' => ['frameId' => 'frame-1', 'loaderId' => 'loader-1'],
+                    default => new \stdClass(),
+                };
+
+                if ($method === 'Target.createTarget') {
+                    $this->receivedData[] = json_encode([
+                        'method' => 'Target.targetCreated',
+                        'params' => ['targetInfo' => [
+                            'targetId' => 'target-1',
+                            'type'     => 'page',
+                            'url'      => 'about:blank',
+                        ]],
+                    ], JSON_THROW_ON_ERROR);
+                }
+                if ($method === 'Target.closeTarget') {
+                    $targetId = (string) ($decoded['params']['targetId'] ?? '');
+                    $this->receivedData[] = json_encode([
+                        'method' => 'Target.targetDestroyed',
+                        'params' => ['targetId' => $targetId],
+                    ], JSON_THROW_ON_ERROR);
+                }
+
+                if ($this->onSend !== null) {
+                    ($this->onSend)($decoded, $this);
+                }
+
+                $this->receivedData[] = json_encode(['id' => $id, 'result' => $result], JSON_THROW_ON_ERROR);
+
+                return true;
+            }
+        };
+    }
+
+    /**
+     * @param list<string> $rawMessages
+     * @return list<array<string, mixed>>
+     */
+    private function decodeSentMessages(array $rawMessages): array
+    {
+        $decoded = [];
+        foreach ($rawMessages as $raw) {
+            $item = json_decode($raw, true);
+            if (is_array($item)) {
+                $decoded[] = $item;
+            }
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $messages
+     * @param array<string, mixed>       $expectedParams
+     * @return array<string, mixed>|null
+     */
+    private function findSentMessage(
+        array $messages,
+        string $method,
+        ?string $sessionId = null,
+        array $expectedParams = []
+    ): ?array {
+        foreach ($messages as $message) {
+            if (($message['method'] ?? null) !== $method) {
+                continue;
+            }
+            if ($sessionId !== null && ($message['sessionId'] ?? null) !== $sessionId) {
+                continue;
+            }
+            $params = is_array($message['params'] ?? null) ? $message['params'] : [];
+            $matched = true;
+            foreach ($expectedParams as $key => $value) {
+                if (($params[$key] ?? null) !== $value) {
+                    $matched = false;
+                    break;
+                }
+            }
+            if ($matched) {
+                return $message;
+            }
+        }
+
+        return null;
     }
 }

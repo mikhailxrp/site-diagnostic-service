@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use ErrorException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -279,6 +280,36 @@ final class UrlValidatorTest extends TestCase
         );
 
         $this->assertSame(['url'], array_keys($result['errors']));
+    }
+
+    public function testResolveHostIpsKeepsIpv4WhenAaaaFailsWithWarningOrException(): void
+    {
+        $ipv4 = static fn (string $host): array => ['93.184.216.34'];
+
+        $fromWarning = resolveHostIps(
+            'shop.ru',
+            $ipv4,
+            static function (): bool {
+                trigger_error('SERVFAIL', E_USER_WARNING);
+
+                return false;
+            }
+        );
+        $this->assertSame(['93.184.216.34'], $fromWarning);
+
+        $fromException = resolveHostIps(
+            'shop.ru',
+            $ipv4,
+            static fn (): array => throw new ErrorException('SERVFAIL')
+        );
+        $this->assertSame(['93.184.216.34'], $fromException);
+
+        $withIpv6 = resolveHostIps(
+            'shop.ru',
+            $ipv4,
+            static fn (): array => [['ipv6' => '2606:4700::1111'], ['ipv6' => '2606:4700::1111']]
+        );
+        $this->assertSame(['93.184.216.34', '2606:4700::1111'], $withIpv6);
     }
 
     /**

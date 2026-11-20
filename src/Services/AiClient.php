@@ -73,7 +73,7 @@ function buildAiChatUrl(string $baseUrl): string
 /**
  * Пустой ключ — AI_ERROR_NO_KEY, недопустимые символы — AI_ERROR_BAD_KEY, иначе null.
  */
-function validateAiKey(string $key): ?string
+function validateAiKey(#[\SensitiveParameter] string $key): ?string
 {
     return match (true) {
         $key === ''                               => AI_ERROR_NO_KEY,
@@ -85,7 +85,7 @@ function validateAiKey(string $key): ?string
 /**
  * @return list<string>
  */
-function buildAiHeaders(string $key): array
+function buildAiHeaders(#[\SensitiveParameter] string $key): array
 {
     return [AI_KEY_HEADER . $key];
 }
@@ -140,7 +140,7 @@ function buildAiImagePart(string $jpegBytes): array
 function sendAiRequest(
     string $baseUrl,
     array $payload,
-    string $key,
+    #[\SensitiveParameter] string $key,
     callable $api,
     callable $sleep,
     int $timeoutSeconds = AI_TIMEOUT_SECONDS
@@ -269,7 +269,7 @@ function limitAiError(string $text): string
     return mb_substr($text, 0, AI_ERROR_MAX_LENGTH);
 }
 
-function redactAiKey(string $text, string $key): string
+function redactAiKey(string $text, #[\SensitiveParameter] string $key): string
 {
     return $key === '' ? $text : str_replace($key, AI_REDACTED, $text);
 }
@@ -368,7 +368,7 @@ function buildAiResultRecord(
     array $payload,
     array $response,
     ?array $parsed,
-    string $key,
+    #[\SensitiveParameter] string $key,
     array $screenshotIds = []
 ): array {
     $error = $response['error'] ?? null;
@@ -392,8 +392,13 @@ function buildAiResultRecord(
  *
  * @return array{ok: bool, message: string}
  */
-function checkAiConnection(string $baseUrl, string $model, string $key, callable $api, callable $sleep): array
-{
+function checkAiConnection(
+    string $baseUrl,
+    string $model,
+    #[\SensitiveParameter] string $key,
+    callable $api,
+    callable $sleep
+): array {
     $payload = buildAiPayload($model, AI_CHECK_MESSAGES, AI_CHECK_SCHEMA, AI_CHECK_MAX_TOKENS);
     $response = sendAiRequest($baseUrl, $payload, $key, $api, $sleep, AI_CHECK_TIMEOUT_SECONDS);
 

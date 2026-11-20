@@ -132,22 +132,33 @@ function claimAiRerun(int $id): bool
 }
 
 /**
- * Подготовка перезапуска ИИ одной транзакцией: недостающие ИИ-шаги добавляются в конец списка, существующие
- * сбрасываются в `pending`, старые клиентские тексты очищаются, находки `source = 'ai'` удаляются
- * (история `ai_results` остаётся), прогресс — 0.
+ * Подготовка перезапуска ИИ одной транзакцией: только для диагностики в статусе `running`.
+ * Недостающие ИИ-шаги добавляются в конец списка, существующие сбрасываются в `pending`, старые клиентские
+ * тексты очищаются, находки `source = 'ai'` удаляются (история `ai_results` остаётся), прогресс — 0.
  *
  * @param list<array{code: string, title: string}> $steps ИИ-шаги по порядку
+ * @return bool false — диагностика уже не в статусе `running` (транзакция откатывается без изменений)
  */
-function resetAiSteps(int $id, array $steps): void
+function resetAiSteps(int $id, array $steps, ?PDO $pdo = null): bool
 {
-    $pdo = getPdo();
+    $pdo ??= getPdo();
+    $resetProgress = $pdo->prepare(
+        "UPDATE diagnostics SET progress = 0, heartbeat_at = NOW() WHERE id = :id AND status = 'running'"
+    );
     $maxPosition = $pdo->prepare(
         'SELECT COALESCE(MAX(position), 0) FROM diagnostic_steps WHERE diagnostic_id = :id'
     );
-    $upsertStep = $pdo->prepare(
-        "INSERT INTO diagnostic_steps (diagnostic_id, step_code, title, position)
-         VALUES (:diagnostic_id, :step_code, :title, :position)
-         ON DUPLICATE KEY UPDATE status = 'pending', message = NULL, started_at = NULL, finished_at = NULL"
+    $findStep = $pdo->prepare(
+        'SELECT 1 FROM diagnostic_steps WHERE diagnostic_id = :diagnostic_id AND step_code = :step_code'
+    );
+    $updateStep = $pdo->prepare(
+        "UPDATE diagnostic_steps
+         SET status = 'pending', message = NULL, started_at = NULL, finished_at = NULL
+         WHERE diagnostic_id = :diagnostic_id AND step_code = :step_code"
+    );
+    $insertStep = $pdo->prepare(
+        'INSERT INTO diagnostic_steps (diagnostic_id, step_code, title, position)
+         VALUES (:diagnostic_id, :step_code, :title, :position)'
     );
     $deleteAiFindings = $pdo->prepare(
         "DELETE FROM findings WHERE diagnostic_id = :id AND source = 'ai'"
@@ -155,27 +166,43 @@ function resetAiSteps(int $id, array $steps): void
     $clearClientTexts = $pdo->prepare(
         'UPDATE findings SET client_text = NULL WHERE diagnostic_id = :id'
     );
-    $resetProgress = $pdo->prepare(
-        'UPDATE diagnostics SET progress = 0, heartbeat_at = NOW() WHERE id = :id'
-    );
 
     $pdo->beginTransaction();
     try {
+        $resetProgress->execute(['id' => $id]);
+        if ($resetProgress->rowCount() !== 1) {
+            $pdo->rollBack();
+
+            return false;
+        }
+
         $maxPosition->execute(['id' => $id]);
         $position = (int) $maxPosition->fetchColumn();
 
         foreach (array_values($steps) as $index => $step) {
-            $upsertStep->execute([
+            $findStep->execute([
                 'diagnostic_id' => $id,
                 'step_code'     => $step['code'],
-                'title'         => $step['title'],
-                'position'      => $position + $index + 1,
             ]);
+            if ($findStep->fetchColumn() !== false) {
+                $updateStep->execute([
+                    'diagnostic_id' => $id,
+                    'step_code'     => $step['code'],
+                ]);
+            } else {
+                $insertStep->execute([
+                    'diagnostic_id' => $id,
+                    'step_code'     => $step['code'],
+                    'title'         => $step['title'],
+                    'position'      => $position + $index + 1,
+                ]);
+            }
         }
         $clearClientTexts->execute(['id' => $id]);
         $deleteAiFindings->execute(['id' => $id]);
-        $resetProgress->execute(['id' => $id]);
         $pdo->commit();
+
+        return true;
     } catch (Throwable $e) {
         $pdo->rollBack();
         throw $e;
@@ -212,86 +239,216 @@ function createDiagnosticSteps(int $diagnosticId, array $steps): void
     }
 }
 
-function markStepRunning(int $diagnosticId, string $stepCode): void
+/**
+ * Переводит шаг в `running`, только пока сама диагностика остаётся в статусе `running`.
+ */
+function markStepRunning(int $diagnosticId, string $stepCode, ?PDO $pdo = null): bool
 {
-    $statement = getPdo()->prepare(
-        "UPDATE diagnostic_steps SET status = 'running', started_at = NOW()
-         WHERE diagnostic_id = :diagnostic_id AND step_code = :step_code"
-    );
-    $statement->execute(['diagnostic_id' => $diagnosticId, 'step_code' => $stepCode]);
-}
-
-function finishStep(int $diagnosticId, string $stepCode, string $status, ?string $message): void
-{
-    $statement = getPdo()->prepare(
-        'UPDATE diagnostic_steps SET status = :status, message = :message, finished_at = NOW()
-         WHERE diagnostic_id = :diagnostic_id AND step_code = :step_code'
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare(
+        "UPDATE diagnostic_steps
+         SET status = 'running', started_at = NOW()
+         WHERE diagnostic_id = :diagnostic_id
+           AND step_code = :step_code
+           AND EXISTS (
+               SELECT 1 FROM diagnostics WHERE id = :running_diagnostic_id AND status = 'running'
+           )"
     );
     $statement->execute([
-        'status'        => $status,
-        'message'       => $message,
-        'diagnostic_id' => $diagnosticId,
-        'step_code'     => $stepCode,
+        'diagnostic_id'         => $diagnosticId,
+        'step_code'             => $stepCode,
+        'running_diagnostic_id' => $diagnosticId,
     ]);
+
+    return $statement->rowCount() === 1;
 }
 
 /**
- * Прогресс и heartbeat — одной записью.
+ * Завершает шаг, только пока сама диагностика остаётся в статусе `running`.
  */
-function updateDiagnosticProgress(int $id, int $progress): void
+function finishStep(int $diagnosticId, string $stepCode, string $status, ?string $message, ?PDO $pdo = null): bool
 {
-    $statement = getPdo()->prepare(
-        'UPDATE diagnostics SET progress = :progress, heartbeat_at = NOW() WHERE id = :id'
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare(
+        "UPDATE diagnostic_steps
+         SET status = :status, message = :message, finished_at = NOW()
+         WHERE diagnostic_id = :diagnostic_id
+           AND step_code = :step_code
+           AND EXISTS (
+               SELECT 1 FROM diagnostics WHERE id = :running_diagnostic_id AND status = 'running'
+           )"
     );
-    $statement->execute(['progress' => $progress, 'id' => $id]);
+    $statement->execute([
+        'status'                => $status,
+        'message'               => $message,
+        'diagnostic_id'         => $diagnosticId,
+        'step_code'             => $stepCode,
+        'running_diagnostic_id' => $diagnosticId,
+    ]);
+
+    return $statement->rowCount() === 1;
+}
+
+/**
+ * Прогресс и heartbeat — одной записью (только пока диагностика `running`).
+ */
+function updateDiagnosticProgress(int $id, int $progress, ?PDO $pdo = null): bool
+{
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare(
+        "UPDATE diagnostics SET progress = :progress, heartbeat_at = NOW() WHERE id = :id AND status = 'running'"
+    );
+    $statement->bindValue('progress', $progress, PDO::PARAM_INT);
+    $statement->bindValue('id', $id, PDO::PARAM_INT);
+    $statement->execute();
+
+    return $statement->rowCount() === 1;
 }
 
 /**
  * Дописывает сводку в `summary_json` (JSON_MERGE_PATCH): ключи других шагов и фаз сохраняются.
+ * Обновляется только при `status = 'running'`.
  *
  * @param array<string, mixed> $summary
  */
-function updateDiagnosticSummary(int $id, array $summary): void
+function updateDiagnosticSummary(int $id, array $summary, ?PDO $pdo = null): bool
 {
     $json = json_encode(
         $summary,
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR
     );
 
-    $statement = getPdo()->prepare(
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare(
         "UPDATE diagnostics
          SET summary_json = JSON_MERGE_PATCH(COALESCE(summary_json, JSON_OBJECT()), CAST(:summary AS JSON))
-         WHERE id = :id"
+         WHERE id = :id AND status = 'running'"
     );
     $statement->execute(['summary' => $json, 'id' => $id]);
-}
 
-function touchDiagnosticHeartbeat(int $id): void
-{
-    $statement = getPdo()->prepare('UPDATE diagnostics SET heartbeat_at = NOW() WHERE id = :id');
-    $statement->execute(['id' => $id]);
+    return $statement->rowCount() === 1;
 }
 
 /**
- * Завершает диагностику. `done` выставляет прогресс 100, `failed` оставляет достигнутый.
+ * Обновляет `heartbeat_at`, только пока диагностика в статусе `running`.
  */
-function finishDiagnostic(int $id, string $status, ?string $errorMessage): void
+function touchDiagnosticHeartbeat(int $id, ?PDO $pdo = null): bool
 {
-    $statement = getPdo()->prepare(
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare("UPDATE diagnostics SET heartbeat_at = NOW() WHERE id = :id AND status = 'running'");
+    $statement->execute(['id' => $id]);
+
+    return $statement->rowCount() === 1;
+}
+
+/**
+ * Завершает выполняющуюся диагностику (`running → done|failed`). `done` выставляет прогресс 100,
+ * `failed` оставляет достигнутый. false — диагностика уже не в статусе `running` (удалена или прервана).
+ */
+function finishDiagnostic(int $id, string $status, ?string $errorMessage, ?PDO $pdo = null): bool
+{
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare(
         "UPDATE diagnostics
          SET status = :status,
              error_message = :error_message,
-             progress = IF(:is_done = 1, 100, progress),
+             progress = CASE WHEN :is_done = 1 THEN 100 ELSE progress END,
              finished_at = NOW(),
              heartbeat_at = NOW()
-         WHERE id = :id"
+         WHERE id = :id AND status = 'running'"
+    );
+    $statement->bindValue('status', $status);
+    $statement->bindValue('error_message', $errorMessage, $errorMessage === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+    $statement->bindValue('is_done', $status === 'done' ? 1 : 0, PDO::PARAM_INT);
+    $statement->bindValue('id', $id, PDO::PARAM_INT);
+    $statement->execute();
+
+    return $statement->rowCount() === 1;
+}
+
+/**
+ * Помечает `failed` диагностику, которая ещё не стартовала в воркере (`queued → failed`),
+ * например при ошибке запуска фонового процесса.
+ */
+function failQueuedDiagnostic(int $id, string $errorMessage, ?PDO $pdo = null): bool
+{
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare(
+        "UPDATE diagnostics
+         SET status = 'failed', error_message = :error_message, finished_at = NOW(), heartbeat_at = NOW()
+         WHERE id = :id AND status = 'queued'"
     );
     $statement->execute([
-        'status'        => $status,
         'error_message' => $errorMessage,
-        'is_done'       => $status === 'done' ? 1 : 0,
         'id'            => $id,
     ]);
+
+    return $statement->rowCount() === 1;
+}
+
+/**
+ * Помечает активные шаги (`running`) прерванными, если диагностика ещё в статусе `running`.
+ */
+function failRunningSteps(int $diagnosticId, string $message, ?PDO $pdo = null): int
+{
+    $pdo ??= getPdo();
+    $statement = $pdo->prepare(
+        "UPDATE diagnostic_steps
+         SET status = 'failed', message = :message, finished_at = NOW()
+         WHERE diagnostic_id = :diagnostic_id
+           AND status = 'running'
+           AND EXISTS (
+               SELECT 1 FROM diagnostics WHERE id = :running_diagnostic_id AND status = 'running'
+           )"
+    );
+    $statement->execute([
+        'message'               => $message,
+        'diagnostic_id'         => $diagnosticId,
+        'running_diagnostic_id' => $diagnosticId,
+    ]);
+
+    return $statement->rowCount();
+}
+
+/**
+ * Атомарно переводит выполняющуюся диагностику и её активные шаги (`running`) в `failed`.
+ * Ничего не меняет, если диагностика уже завершена, прервана или удалена.
+ */
+function failRunningDiagnostic(int $id, string $errorMessage, string $stepMessage, ?PDO $pdo = null): bool
+{
+    $pdo ??= getPdo();
+    $failDiagnostic = $pdo->prepare(
+        "UPDATE diagnostics
+         SET status = 'failed', error_message = :error_message, finished_at = NOW(), heartbeat_at = NOW()
+         WHERE id = :id AND status = 'running'"
+    );
+    $failRunningStep = $pdo->prepare(
+        "UPDATE diagnostic_steps
+         SET status = 'failed', message = :message, finished_at = NOW()
+         WHERE diagnostic_id = :id AND status = 'running'"
+    );
+
+    $pdo->beginTransaction();
+    try {
+        $failDiagnostic->execute([
+            'error_message' => $errorMessage,
+            'id'            => $id,
+        ]);
+        $failed = $failDiagnostic->rowCount() === 1;
+
+        if ($failed) {
+            $failRunningStep->execute([
+                'message' => $stepMessage,
+                'id'      => $id,
+            ]);
+        }
+        $pdo->commit();
+
+        return $failed;
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
 }
 
 /**

@@ -540,4 +540,152 @@ final class ResourceCheckTest extends TestCase
             $result['findings'][0]['evidence']['pages']
         );
     }
+
+    public function testLargeResourceResponsesDoNotAccumulateInMemory(): void
+    {
+        $html = '';
+        for ($i = 1; $i <= 300; $i++) {
+            $html .= "<img src=\"/img-{$i}.png\" alt=\"\">";
+        }
+
+        $probeMaxBytes = [];
+        $seq = 0;
+        $request = static function (string $url, string $method, ?int $maxBytes = null) use (&$probeMaxBytes, &$seq): array {
+            if ($method === 'HEAD') {
+                return [
+                    'final_url' => $url, 'status' => 405, 'headers' => [], 'body' => '',
+                    'truncated' => false, 'redirects' => [], 'time_ms' => 1, 'error' => null,
+                ];
+            }
+            $probeMaxBytes[] = $maxBytes;
+            $seq++;
+
+            return [
+                'final_url' => $url, 'status' => 200, 'headers' => [],
+                'body'      => "/* {$seq} */ " . str_repeat('x', 5 * 1024 * 1024),
+                'truncated' => false, 'redirects' => [], 'time_ms' => 1, 'error' => null,
+            ];
+        };
+
+        gc_collect_cycles();
+        $beforeUsage = memory_get_usage();
+        $beforePeak = memory_get_peak_usage();
+
+        $result = runResourceCheck($this->context($html), $request);
+
+        gc_collect_cycles();
+        $afterUsage = memory_get_usage();
+        $afterPeak = memory_get_peak_usage();
+
+        $this->assertCount(300, $result['facts']['resources']);
+        $this->assertSame([], $result['findings']);
+        $this->assertSame([RESOURCE_EXISTENCE_PROBE_BYTES], array_values(array_unique($probeMaxBytes)));
+        $this->assertLessThan(64 * 1024 * 1024, $afterUsage - $beforeUsage);
+        $this->assertLessThan(64 * 1024 * 1024, $afterPeak - $beforePeak);
+    }
+
+    public function testLargeStylesheetBodiesDoNotAccumulateInMemory(): void
+    {
+        $html = '';
+        for ($i = 1; $i <= 300; $i++) {
+            $html .= "<link rel=\"stylesheet\" href=\"/style-{$i}.css\">";
+        }
+
+        $seq = 0;
+        $request = static function (string $url, string $method, ?int $maxBytes = null) use (&$seq): array {
+            $seq++;
+
+            return [
+                'final_url' => $url, 'status' => 200, 'headers' => [],
+                'body'      => "/* css-{$seq} */ " . str_repeat(' ', 5 * 1024 * 1024),
+                'truncated' => false, 'redirects' => [], 'time_ms' => 1, 'error' => null,
+            ];
+        };
+
+        gc_collect_cycles();
+        $beforeUsage = memory_get_usage();
+        $beforePeak = memory_get_peak_usage();
+
+        $result = runResourceCheck($this->context($html), $request);
+
+        gc_collect_cycles();
+        $afterUsage = memory_get_usage();
+        $afterPeak = memory_get_peak_usage();
+
+        $this->assertCount(300, $result['facts']['resources']);
+        $this->assertSame([], $result['findings']);
+        $this->assertLessThan(64 * 1024 * 1024, $afterUsage - $beforeUsage);
+        $this->assertLessThan(64 * 1024 * 1024, $afterPeak - $beforePeak);
+    }
+
+    public function testNonParsedStylesAndProbeMaxBytesAnd416Fallback(): void
+    {
+        $html = '<img src="/a.png" alt=""><img src="/empty.png" alt=""><link rel="stylesheet" href="/lvl0.css">';
+        $calls = [];
+        $emptyProbed = false;
+
+        $request = static function (string $url, string $method, ?int $maxBytes = null) use (&$calls, &$emptyProbed): array {
+            $calls[] = [$method, $url, $maxBytes];
+
+            if ($url === 'https://shop.test/a.png' && $method === 'HEAD') {
+                return ['final_url' => $url, 'status' => 405, 'headers' => [], 'body' => '', 'truncated' => false, 'redirects' => [], 'time_ms' => 1, 'error' => null];
+            }
+            if ($url === 'https://shop.test/empty.png' && $method === 'HEAD') {
+                return ['final_url' => $url, 'status' => 405, 'headers' => [], 'body' => '', 'truncated' => false, 'redirects' => [], 'time_ms' => 1, 'error' => null];
+            }
+            if ($url === 'https://shop.test/empty.png' && $method === 'GET' && !$emptyProbed) {
+                $emptyProbed = true;
+                return ['final_url' => $url, 'status' => 416, 'headers' => [], 'body' => '', 'truncated' => false, 'redirects' => [], 'time_ms' => 1, 'error' => null];
+            }
+            $body = match ($url) {
+                'https://shop.test/lvl0.css' => '@import "/lvl1.css";',
+                'https://shop.test/lvl1.css' => '@import "/lvl2.css";',
+                default                      => '',
+            };
+
+            return ['final_url' => $url, 'status' => 200, 'headers' => [], 'body' => $body, 'truncated' => false, 'redirects' => [], 'time_ms' => 1, 'error' => null];
+        };
+
+        $result = runResourceCheck($this->context($html), $request);
+
+        $this->assertSame([], $result['findings']);
+        $this->assertSame([
+            ['GET', 'https://shop.test/lvl0.css', null],
+            ['HEAD', 'https://shop.test/a.png', null],
+            ['GET', 'https://shop.test/a.png', RESOURCE_EXISTENCE_PROBE_BYTES],
+            ['HEAD', 'https://shop.test/empty.png', null],
+            ['GET', 'https://shop.test/empty.png', RESOURCE_EXISTENCE_PROBE_BYTES],
+            ['GET', 'https://shop.test/empty.png', null],
+            ['GET', 'https://shop.test/lvl1.css', null],
+            ['HEAD', 'https://shop.test/lvl2.css', null],
+        ], $calls);
+    }
+
+    public function testResourceLimitStopsNewEntriesButPreservesPageDeduplication(): void
+    {
+        $this->assertSame(500, RESOURCE_MAX_PER_DIAGNOSTIC);
+
+        $homeHtml = '<img src="/broken.png" alt=""><img src="/r2.png" alt=""><img src="/r3.png" alt=""><img src="/r4.png" alt="">';
+        $catHtml = '<img src="/broken.png" alt=""><img src="/r5.png" alt=""><img src="/r6.png" alt="">';
+        $context = $this->multiPageContext($homeHtml, ['category' => [$catHtml]]);
+
+        $result = runResourceCheck(
+            $context,
+            $this->request(['https://shop.test/broken.png' => ['status' => 404]]),
+            null,
+            3
+        );
+        $withErrors = addPageErrorFindings($result, $context);
+
+        $this->assertCount(3, $result['facts']['resources']);
+        $this->assertTrue($result['facts']['limited']);
+        $this->assertSame(3, $result['facts']['skipped_by_limit']);
+        $this->assertCount(1, $result['findings']);
+        $this->assertSame(
+            ['https://shop.test/', 'https://shop.test/category/'],
+            $result['findings'][0]['evidence']['pages']
+        );
+        $this->assertStringContainsString('ресурсов: 3 (предел, пропущено: 3)', $result['message']);
+        $this->assertStringContainsString('ресурсов: 3 (предел, пропущено: 3)', $withErrors['message']);
+    }
 }

@@ -75,8 +75,12 @@ const SPEED_NO_SCORE_LABEL      = 'без оценки';
  * @param callable(string $strategy): void|null $afterEach после каждого запроса (heartbeat)
  * @return array<string, mixed> результат шага; `facts.pagespeed` — для `summary_json.pagespeed`
  */
-function runSpeedCheck(array $context, string $key, callable $api, ?callable $afterEach = null): array
-{
+function runSpeedCheck(
+    array $context,
+    #[\SensitiveParameter] string $key,
+    callable $api,
+    ?callable $afterEach = null
+): array {
     $key = trim($key);
     if ($key === '') {
         return ['status' => 'skipped', 'message' => SPEED_NO_KEY_MESSAGE];

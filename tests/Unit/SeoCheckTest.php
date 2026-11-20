@@ -329,6 +329,48 @@ final class SeoCheckTest extends TestCase
         $this->assertSame(3, $result['facts']['sitemap']['urls_count']);
     }
 
+    public function testGzipBombSitemapReturnsNullWithoutMemorySpike(): void
+    {
+        $deflate = deflate_init(ZLIB_ENCODING_GZIP, ['level' => 1]);
+        $this->assertNotFalse($deflate);
+
+        $chunk = str_repeat(' ', 65536);
+        $bomb = deflate_add($deflate, '<urlset><url><loc>https://shop.test/</loc></url>', ZLIB_NO_FLUSH);
+        for ($i = 0; $i < 1024; $i++) {
+            $bomb .= deflate_add($deflate, $chunk, ZLIB_NO_FLUSH);
+        }
+        $bomb .= deflate_add($deflate, '</urlset>', ZLIB_FINISH);
+        unset($deflate, $chunk);
+
+        $peakBefore = memory_get_peak_usage();
+        $parsed = parseSitemap(['body' => $bomb]);
+        $peakAfter = memory_get_peak_usage();
+
+        $this->assertNull($parsed);
+        $this->assertLessThan(20 * 1024 * 1024, $peakAfter - $peakBefore);
+
+        $result = $this->check($this->context($this->fixture('page-ok.html')), [
+            self::HOME . 'robots.txt'     => ['body' => "User-agent: *\nDisallow:\nSitemap: https://shop.test/sitemap.xml.gz\n"],
+            self::HOME . 'sitemap.xml.gz' => ['body' => $bomb],
+        ]);
+
+        $this->assertSame('done', $result['status']);
+        $this->assertSame('error', $result['facts']['sitemap']['state']);
+        $this->assertSame(SEO_SEVERITY['sitemap_error'], $this->findingByTitle($result, 'не XML-sitemap')['severity']);
+    }
+
+    public function testGzipSitemapBoundaryAndCorruptStream(): void
+    {
+        $atLimit = decodeSitemapGzip((string) gzencode(str_repeat('a', 100)), 100);
+        $overLimit = decodeSitemapGzip((string) gzencode(str_repeat('a', 101)), 100);
+        $corrupt = parseSitemap(['body' => SEO_GZIP_MAGIC . 'corrupt-payload']);
+
+        $this->assertNotNull($atLimit);
+        $this->assertSame(100, strlen($atLimit));
+        $this->assertNull($overLimit);
+        $this->assertNull($corrupt);
+    }
+
     public function testTruncatedSitemapIsCountedWithoutXmlParsing(): void
     {
         $partial = substr($this->fixture('sitemap.xml'), 0, (int) strpos($this->fixture('sitemap.xml'), '</urlset>'));
@@ -458,5 +500,61 @@ final class SeoCheckTest extends TestCase
 
         $this->assertSame(['robots.txt', 'sitemap.xml', 'Адресов в sitemap'], array_column($rows, 'label'));
         $this->assertSame('3', $rows[2]['value']);
+    }
+
+    public function testRobotsWithFiftyThousandSitemapsCapsCandidatesInLinearTimeAndKeepsDisallow(): void
+    {
+        $lines = [];
+        for ($i = 0; $i < 50000; $i++) {
+            $n = $i % 100;
+            $lines[] = "Sitemap: https://shop.test/sitemap-{$n}.xml";
+        }
+        $lines[] = 'User-agent: *';
+        $lines[] = 'Disallow: /';
+        $robots = implode("\n", $lines);
+
+        $parsed = parseRobotsTxt($robots);
+        $this->assertCount(SEO_MAX_SITEMAP_CANDIDATES, $parsed['sitemaps']);
+        $this->assertSame([
+            'https://shop.test/sitemap-0.xml',
+            'https://shop.test/sitemap-1.xml',
+            'https://shop.test/sitemap-2.xml',
+            'https://shop.test/sitemap-3.xml',
+            'https://shop.test/sitemap-4.xml',
+        ], $parsed['sitemaps']);
+        $this->assertSame(['*'], findRobotsDisallowAll($parsed['groups']));
+
+        $responses = [
+            self::HOME . 'robots.txt' => ['body' => $robots],
+        ];
+        $result = $this->check($this->context($this->fixture('page-ok.html')), $responses);
+        $this->assertCount(SEO_MAX_SITEMAP_CANDIDATES, $result['facts']['robots']['sitemaps']);
+        $this->assertSame(['*'], $result['facts']['robots']['disallow_all']);
+        // 1 запрос на robots.txt + не более 5 запросов на sitemap-кандидаты
+        $this->assertCount(1 + SEO_MAX_SITEMAP_CANDIDATES, $this->requested);
+    }
+
+    public function testCheckSitemapCapsProvidedCandidatesToMaxLimit(): void
+    {
+        $candidates = [];
+        for ($i = 1; $i <= 20; $i++) {
+            $candidates[] = self::HOME . "s-{$i}.xml";
+        }
+
+        $requested = [];
+        $result = checkSitemap(
+            rtrim(self::HOME, '/'),
+            $candidates,
+            static function (string $url) use (&$requested): array {
+                $requested[] = $url;
+
+                return ['status' => 404, 'body' => '', 'headers' => [], 'truncated' => false, 'error' => null];
+            },
+            []
+        );
+
+        $this->assertSame(SEO_STATE_ERROR, $result['facts']['state']);
+        $this->assertCount(SEO_MAX_SITEMAP_CANDIDATES, $requested);
+        $this->assertSame(self::HOME . 's-5.xml', $requested[4]);
     }
 }

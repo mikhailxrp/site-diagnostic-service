@@ -13,9 +13,10 @@ declare(strict_types=1);
  * HTML-обработчики ошибок (registerAppErrorHandlers) здесь не подключаются.
  */
 
-const EXIT_OK          = 0;
-const EXIT_ERROR       = 1;
-const EXIT_INVALID_ARG = 2;
+const EXIT_OK                             = 0;
+const EXIT_ERROR                          = 1;
+const EXIT_INVALID_ARG                    = 2;
+const WORKER_SHUTDOWN_MEMORY_RESERVE_BYTES = 131072; // 128 КБ резерва под обработку OOM в shutdown-функции
 
 if (PHP_SAPI !== 'cli') {
     echo "Воркер запускается только из консоли: php bin/worker.php <id> [--ai]\n";
@@ -50,19 +51,45 @@ set_error_handler(static function (int $errno, string $errstr, string $errfile, 
     throw new ErrorException($errstr, 0, $errno, $errfile, $errline);
 });
 
+$claimed = false;
+$onClaimed = static function () use (&$claimed): void {
+    $claimed = true;
+};
+$oomReserve = str_repeat("\0", WORKER_SHUTDOWN_MEMORY_RESERVE_BYTES);
+
+register_shutdown_function(static function () use ($diagnosticId, &$claimed, &$oomReserve): void {
+    $oomReserve = '';
+    $error = error_get_last();
+    if (!$claimed || !isFatalWorkerError($error)) {
+        return;
+    }
+
+    handleWorkerFatalError($diagnosticId, $error);
+});
+
 try {
-    $isRun = $isAiOnly ? runAiRerun($diagnosticId) : runDiagnostic($diagnosticId);
+    $isRun = $isAiOnly ? runAiRerun($diagnosticId, $onClaimed) : runDiagnostic($diagnosticId, $onClaimed);
     if (!$isRun) {
         fwrite(STDERR, "Диагностика {$diagnosticId} не найдена или уже не в очереди — пропуск.\n");
         exit(EXIT_ERROR);
     }
+} catch (DiagnosticNoLongerRunningException $e) {
+    logWarning('Воркер остановлен: диагностика больше не выполняется', [
+        'script'        => 'bin/worker.php',
+        'diagnostic_id' => $diagnosticId,
+        'ai_only'       => $isAiOnly,
+    ]);
+    exit(EXIT_OK);
 } catch (Throwable $e) {
     logException($e, ['script' => 'bin/worker.php', 'diagnostic_id' => $diagnosticId, 'ai_only' => $isAiOnly]);
 
-    try {
-        finishDiagnostic($diagnosticId, 'failed', truncateStepMessage('Ошибка воркера: ' . $e->getMessage()));
-    } catch (Throwable $finishError) {
-        logException($finishError, ['script' => 'bin/worker.php', 'diagnostic_id' => $diagnosticId]);
+    if ($claimed) {
+        try {
+            $errorMessage = truncateStepMessage('Ошибка воркера: ' . $e->getMessage());
+            failRunningDiagnostic($diagnosticId, $errorMessage, $errorMessage);
+        } catch (Throwable $finishError) {
+            logException($finishError, ['script' => 'bin/worker.php', 'diagnostic_id' => $diagnosticId]);
+        }
     }
 
     fwrite(STDERR, "Ошибка воркера. Подробности: storage/logs/app.log\n");

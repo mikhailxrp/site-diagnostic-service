@@ -12,6 +12,176 @@
 
 ---
 
+**Дата:** 20.11.2026
+**Что сделано:** выполнена реальная E2E-диагностика `#170` сайта `https://nakode.ru/` через CLI-воркер `bin/worker.php 170` и локальный OpenServer (`https://service-diagnostic-site.local`) для проверки правок ревью (`review-paln.md`, волны 1–5) в боевых условиях.
+- **Прогон воркера (`bin/worker.php 170`):** завершился с кодом `0` (`14:30:30` → `14:38:52`, `status = done`, `progress = 100`). 14 шагов завершены в `done`, шаг `checkout` — штатно `skipped` (`страница товара не найдена — сценарий заказа не от чего начинать`).
+- **Собранные факты и находки:** стек — 7 элементов (`WordPress 7.1.5`, тема `myblogtheme`, `nginx`, `Bootstrap`, `jQuery 3.7.1`, `jQuery Migrate 3.4.1`, `Яндекс Метрика`); проверено страниц: 2 (`https://nakode.ru/` и статья `https://nakode.ru/kak-obnovlyat-woocommerce-i-ne-slomat-oformlenie-zakaza/`, распознанная эвристикой как `checkout`), ресурсов: 67 (битых 0), открытых служебных файлов: 0 из 21; SEO: `robots.txt` + индекс sitemap из 3 файлов (121 URL); Chrome: 2 из 2 страниц (5 из 6 загрузок, 0 ошибок JS, 0 упавших запросов, 5 скриншотов); PageSpeed: Mobile `99`, Desktop `100`; ИИ (`qwen/qwen4-max`): 5 записей `ai_results` (`status = ok`); всего 8 находок (`critical`: 1, `high`: 1, `medium`: 3, `low`: 3; `max_details_bytes = 1174`).
+- **Веб-отчёты и PDF:** `GET /diagnostics/170` (HTTP 200, 151 959 байт), `GET /diagnostics/170/client` (HTTP 200, 15 563 байт), `GET /diagnostics/170/pdf?version=full` (HTTP 200, `application/pdf`, 6 731 846 байт, `%PDF-`), `GET /diagnostics/170/pdf?version=client` (HTTP 200, `application/pdf`, 63 122 байт, `%PDF-`).
+- **Чистота логов и временных файлов:** размер `storage/logs/app.log` не изменился (`11 038` байт — 0 новых ошибок и предупреждений), в `storage/temp/` не осталось профилей `chrome-*`, в `storage/pdf/` — только `.gitkeep`. Подтверждено на практике ограничение не-магазинного сайта: краулер принял статью со словами о WooCommerce/оформлении за страницу `checkout`, а ИИ-анализ счёл отсутствие магазина критической гипотезой.
+**Что следующее:** 1) при необходимости проверить шаг `checkout` на 2–3 реальных интернет-магазинах; 2) при желании доработать промпты/эвристики под не-магазинные сайты или выполнить оставшиеся за рамками плана задачи из `review-paln.md`.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 2 плана ревью (`review-paln.md`, Волна 5, часть 3–4) — защита от отправки реального заказа в сценарии оформления (`default-deny` для изменяющих запросов, проверка тела `POST` и `GET`-заказов, анализ формы кнопок, перехват дочерних целей без `Fetch.disable`). **Волна 5 завершена (пункты 1, 2).**
+- `data/checkout-selectors.php`: из `generic.add_to_cart_texts` убран паттерн `buy(?:\s+now)?`, в `forbidden_texts` добавлен `\bbuy\s+now\b`, в `forbidden_attrs` добавлены безопасные шаблоны (`buy[-_]?now`, `(?:make|create|new|place|submit)[-_]?order`, `order[-_]?(?:form|btn|button|now|modal|popup|make|create)`, `zakaz`, `oformlen`, `payment`, без блокировки `order-1`), расширены `requests.order` и `requests.add_to_cart` (`cart[/.]add` для OpenCart 4, `cart[-_]?add`, `basket[-_]?add`), добавлены `requests.add_to_cart_body` и `requests.order_body`.
+- `src/Services/CheckoutScenario.php` и `src/Services/DiagnosticRunner.php`:
+  - `CHECKOUT_PROBE_SCRIPT` и `normalizeCheckoutProbe()` собирают `data-url`, `data-href`, `data-target` и `form_action` (`formaction` кнопки или `action` ближайшей `<form>`); `isCheckoutFormActionForbidden()` и `isForbiddenCheckoutButton()` блокируют кнопки с опасным `form_action` и «купить» со ссылкой/атрибутами на заказ;
+  - `extractCheckoutRequestPostData()` декодирует `postData` и `postDataEntries` (с ограничением `CHECKOUT_POST_DATA_MAX_BYTES = 16384`); `isStaticCheckoutAssetGet()` и `decideCheckoutRequest()` реализуют `default-deny` для изменяющих запросов (до оформления пропускаются только запросы добавления в корзину без признаков заказа в теле, на стадии оформления блокируются все) и блокируют «заказные» GET-запросы (кроме статических `.css`/шрифтов/картинок/`.js` и самих страниц оформления, не относящихся к быстрому заказу); `recordCheckoutRequest()` учитывает и заблокированные не-изменяющие запросы;
+  - добавлены `buildCheckoutBrowserOptions()` (передаётся в `launchBrowser()` в `runCheckoutStep()`), проверка стартового адреса и ранняя отмена `navigateBrowserPage()` по `$run['ssrf_blocked_main']` (исправлена передача состояния по ссылке `&` в замыканиях `$shouldAbort` в `CheckoutScenario.php` и `BrowserService.php`); `attachCheckoutListeners()` переведён на общий `attachBrowserRequestInterception()` с проверкой `isBrowserRequestAllowed()` и анализом `postData`; из `runCheckoutScenario()` убран `Fetch.disable` до закрытия вкладки.
+- Тесты: в `tests/Unit/CheckoutScenarioTest.php` обновлены 3 устаревших утверждения под новую политику и добавлены проверки `decideCheckoutRequest()` (GET/POST/GraphQL/RPC/стадия `checkout`), `extractCheckoutRequestPostData()`, `recordCheckoutRequest()`, анализа `form_action`/`data-*` кнопок и 3 `MockSocket`-теста на `buildCheckoutBrowserOptions()`, `attachCheckoutListeners()` (включая дочерний `iframe`) и `runCheckoutScenario()` (SSRF + отсутствие `Fetch.disable`).
+- Проверки: `php -l` на всех 8 изменённых и новых файлах Волны 5 — без ошибок; целевые тесты (`BrowserServiceTest|CheckoutScenarioTest`) — 54 теста, 288 assertions за 0.169 с, (`CheckoutScenarioTest|CheckoutCheckTest`) — 56 тестов, 343 assertions; полный прогон PHPUnit на PHP 8.3 OpenServer — 1098 тестов, 3984 assertions (OK, пик 36.00 MB); локальный E2E на реальном Chrome 159 (`data:`-страница под `attachCheckoutListeners` + `buildCheckoutBrowserOptions()`) заблокировал `POST /order/create`, `POST /wp-admin/admin-ajax.php` (`action=create_order`) и `GET http://127.0.0.1:9/ssrf` (`checkout_sent=0`, `blocked=3`, `passed=0`, `errors=0`); в `storage/logs/app.log` добавилась только ожидаемая запись WARNING от SSRF-запроса (всего 5 ожидаемых WARNING за Волну 5), `storage/temp/` без оставшихся `chrome-*` профилей. Ручной E2E на 2–3 живых интернет-магазинах не запускался (внешнее действие — требует отдельного разрешения владельца).
+**Что следующее:** 1) согласование с владельцем и ручной E2E-прогон на реальных магазинах/тестовых URL (`review-paln.md`, «Общая проверка после всех пунктов»); 2) Волна 6 / оставшиеся за рамками плана задачи по решению владельца (локальный фильтрующий прокси против DNS-rebinding в Chrome, проверка кода запуска в `JobLauncher::launchWorker()`).
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 1 плана ревью (`review-paln.md`, Волна 5, часть 1–2) — защита от SSRF через headless Chrome (перехват CDP, защита PDF-режима, дочерние цели и всплывающие окна).
+- `src/Services/BrowserRequestGuard.php`: добавлены чистые функции проверки адреса для Chrome (`isBrowserRequestAllowed()` поверх `normalizeHostName()` / `validateSiteHost()` с блокировкой локальных/приватных/служебных адресов, нестандартных схем, backslash/userinfo-обходов и fail-closed при ошибке резолвера), строгий режим печати PDF (`isBrowserPdfRequestAllowed()` — только `file:///` без UNC и `..`, `data:` и `about:blank|srcdoc`), TTL-кэш резолвера (`createCachedBrowserResolver()`) и очистка адресов для лога (`sanitizeBrowserLogUrl()`).
+- `src/Services/BrowserService.php`: в `buildBrowserOptions()` исключён `--disable-popup-blocking` и добавлен `--block-new-web-contents`; добавлены `buildBrowserPdfLaunchOptions()` (`disableJavascript => true`, `ignoreCertificateErrors => false`) и общий CDP-перехватчик `attachBrowserRequestInterception()` (`Network.setBypassServiceWorker`, `Fetch.enable`, `Target.setAutoAttach` с перехватом дочерних `iframe`/воркеров, закрытием сторонних `page`-целей через `Target.closeTarget`, fail-closed при ошибке и без `Fetch.disable` до закрытия вкладки). В `navigateBrowserPage()` добавлена ранняя остановка по `$shouldAbort`; `openBrowserPage()` проверяет стартовый URL до создания вкладки, блокирует SSRF-редиректы и не снимает скриншот при блокировке главного документа; `printBrowserHtmlToPdf()` проверяет `file:///` через `isBrowserPdfRequestAllowed()` и печатает под строгим перехватом без JS и без сети.
+- Тесты: создан `tests/Unit/BrowserRequestGuardTest.php` (54 теста, 62 assertions — URL-правила браузера и PDF, TTL-кэш резолвера, fail-closed); расширен `tests/Unit/BrowserServiceTest.php` (`buildBrowserOptions`, `buildBrowserPdfLaunchOptions`, отказ от небезопасных PDF-URI до запуска Chrome и 3 `MockSocket`-теста на `attachBrowserRequestInterception()` / `openBrowserPage()`).
+- Проверки: `php -l` на `BrowserRequestGuard.php`, `BrowserService.php` и их тестах — без ошибок; целевые тесты (`BrowserRequestGuardTest|BrowserServiceTest|PdfServiceTest`) — 83 теста, 184 assertions (OK); локальный E2E на реальном Chrome 159 (`C:\Program Files\Google\Chrome\Application\chrome.exe`): прямой запрос `http://127.0.0.1/`, JS-редирект с `data:` на `http://127.0.0.1:9/ssrf` и `iframe` на `http://127.0.0.1:9/iframe-ssrf` заблокированы (без скриншота), `printBrowserHtmlToPdf()` с внешним `<img>` и `<script>` собрал валидный `%PDF-` (15 809 байт), в `storage/logs/app.log` зафиксированы только 4 ожидаемые записи WARNING о блокировке SSRF без PHP errors/warnings и секретов, профили в `storage/temp/` удалены.
+**Что следующее:** пункт 2 плана ревью (`data/checkout-selectors.php`, `CheckoutScenario.php`, `DiagnosticRunner.php` — default-deny для изменяющих запросов и защита от отправки реального заказа).
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 11 плана ревью (`review-paln.md`, Волна 4) — heartbeat по времени, оптимистичная блокировка БД, защитные лимиты и обработка фатальных ошибок воркера. **Волна 4 завершена (пункт 11).**
+- `src/Services/DiagnosticNoLongerRunningException.php`: добавлено исключение `DiagnosticNoLongerRunningException extends Exception` (не `RuntimeException`, чтобы локальные `catch (RuntimeException)` в проверках и ИИ-анализе его не перехватывали).
+- `src/Core/Database.php`: добавлен флаг `PDO::MYSQL_ATTR_FOUND_ROWS => true` в `getPdo()`, чтобы повторное обновление `heartbeat_at = NOW()` в ту же секунду возвращало `rowCount() === 1` для живой `running`-диагностики.
+- `src/Models/DiagnosticModel.php` и `src/Controllers/DiagnosticController.php`: функции воркера (`resetAiSteps`, `markStepRunning`, `finishStep`, `updateDiagnosticProgress`, `updateDiagnosticSummary`, `touchDiagnosticHeartbeat`, `finishDiagnostic`) получили опциональный `?PDO $pdo = null`, ограничение `status = 'running'` и возврат `bool`; `resetAiSteps()` проверяет `status = 'running'` первым в транзакции и при необходимости откатывается без удаления данных, использует переносимый SQL (`SELECT` + `UPDATE`/`INSERT`); `finishDiagnostic()` использует `CASE WHEN` и `bindValue(..., PDO::PARAM_INT)`. Добавлены `failQueuedDiagnostic()`, `failRunningSteps()`, `failRunningDiagnostic()`. В `DiagnosticController::markLaunchFailed()` вызов `finishDiagnostic()` заменён на `failQueuedDiagnostic()`.
+- `src/Services/DiagnosticRunner.php`: добавлены `HEARTBEAT_MIN_INTERVAL_SECONDS = 30`, `assertDiagnosticRunning()`, `withHeartbeat()`, `isFatalWorkerError()`, `buildWorkerFatalMessages()` и `handleWorkerFatalError()`. Обёртка `withHeartbeat()` и проверки `assertDiagnosticRunning()` применены ко всем сетевым и ИИ-шагам (`availability`, `stack`, `outdated`, `vulnerabilities`, `crawl`, `resources`, `seo`, `exposed_files`, `browser`, `checkout`, `pagespeed`, `ai_problem`, `ai_visual`, `ai_summary`, `ai_client`). `executeSteps()`, `finalizeStepPersistence()`, `executeStepsWithDb()`, `runDiagnostic()` и `runAiRerun()` пробрасывают `DiagnosticNoLongerRunningException` и принимают `$onClaimed`.
+- `bin/worker.php`: добавлен резерв `WORKER_SHUTDOWN_MEMORY_RESERVE_BYTES = 131072` (128 КБ), `register_shutdown_function` с вызовом `handleWorkerFatalError()`, тихое завершение `EXIT_OK` при `DiagnosticNoLongerRunningException` и перевод активной диагностики в `failed` через `failRunningDiagnostic()`.
+- `src/Services/Checks/SeoCheck.php`, `src/Services/StackDetector.php`, `src/Services/Checks/OutdatedCheck.php`, `src/Services/Checks/VulnerabilityCheck.php`: зафиксированы согласованные с владельцем лимиты (`SEO_MAX_SITEMAP_CANDIDATES = 5` с O(1) дедупликацией в `parseRobotsTxt()` и `array_slice` в `checkSitemap()`; `STACK_MAX_PLUGINS_PER_CMS = 100` и `STACK_MAX_THEMES_PER_CMS = 20` без отсечения плагинов-платформ и донакопления версий; `WP_PLUGIN_LOOKUP_MAX_PER_DIAGNOSTIC = 30` только на онлайн-запросы при промахе кэша с отражением пропуска в `facts['plugin_lookups_skipped']` и сообщении шага), а также проброс `DiagnosticNoLongerRunningException` в `OutdatedCheck.php` и `VulnerabilityCheck.php`.
+- `.docs/phases/_status.md`: зафиксированы решения владельца от 20.11.2026 по лимитам в `SeoCheck.php`, `OutdatedCheck.php` и `StackDetector.php`.
+- Тесты: создан `tests/Unit/DiagnosticModelTest.php` (7 тестов оптимистичной блокировки и транзакций на SQLite `:memory:`); дополнены `DiagnosticRunnerTest.php` (6 тестов), `SeoCheckTest.php` (2 теста), `StackDetectorTest.php` (1 тест), `OutdatedCheckTest.php` (2 теста), `VulnerabilityCheckTest.php` (1 тест).
+- Проверки: `php -l` на всех 16 файлах — без ошибок; целевые тесты (`DiagnosticModelTest|DiagnosticRunnerTest|SeoCheckTest|StackDetectorTest|OutdatedCheckTest|VulnerabilityCheckTest`) — 156 тестов, 896 assertions (OK); полный прогон PHPUnit на PHP 8.3 OpenServer — 1035 тестов, 3809 assertions (OK, пик 36.00 MB); `bin/worker.php 0` и `bin/worker.php 1 --bad` вернули код `2`; изолированная CLI-проверка OOM под `-d memory_limit=16M` с резервом 128 КБ подтвердила срабатывание `register_shutdown_function` и `handleWorkerFatalError()` (`OOM_RESULT=true`). В `storage/logs/app.log` новых записей нет (размер остался 10 160 байт). Живая диагностика и MySQL-воркер не запускались.
+**Что следующее:** Волна 5 — пункты 1 и 2 (`UrlValidator` / `BrowserService` / `CheckoutScenario` — SSRF через headless Chrome и защита от отправки реального заказа).
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 9 плана ревью (`review-paln.md`, Волна 3) — устранено накопление тел ответов в памяти и введён лимит 500 ресурсов за диагностику. **Волна 3 завершена (пункты 14, 13, 9).**
+- `src/Services/Checks/ResourceCheck.php`: добавлены константы `RESOURCE_EXISTENCE_PROBE_BYTES` (`1`), `RESOURCE_RANGE_NOT_SATISFIABLE_STATUS` (`416`) и `RESOURCE_MAX_PER_DIAGNOSTIC` (`500`, по согласованию с владельцем) и хелпер `enqueueResourceEntry()`. При отказе `HEAD` проверка `checkResource()` запрашивает 1 байт через `Range` (при ответе `416` на пустой файл повторяет `GET` без `Range`), тела неразбираемых ресурсов (включая импортированные стили глубже `RESOURCE_CSS_MAX_DEPTH`) не запрашиваются и не сохраняются. В `runResourceCheck()` тело CSS извлекается в `$cssBody` и освобождается сразу после `extractCssResources()`, а в `$entries` остаются только метаданные; при превышении лимита 500 уникальных ресурсов новые записи не создаются (с сохранением привязки уже добавленных к новым страницам), `facts['limited']` выставляется в `true`, возвращается `facts['skipped_by_limit']`, а `buildResourcesStepMessage()` отражает пропуск.
+- `src/Services/DiagnosticRunner.php`: `runResourcesStep()` передаёт `$maxBytes` в `httpRequest()`; `addPageErrorFindings()` передаёт `skipped_by_limit` в `buildResourcesStepMessage()`.
+- `src/Services/ShopCrawler.php`: добавлен `findSelectedCrawlPage()`, в `fetchCrawlPage()` кэш `$crawl['responses']` хранит только метаданные (`final_url`, `status`, `time_ms`, `error`, `truncated`, `type`) без `body` и `headers`; уже классифицированные нецелевые страницы пропускаются при поиске товара, а полные тела сохраняются только в `$pages` для выбранных страниц.
+- `.docs/phases/_status.md`: зафиксировано решение владельца от 20.11.2026 о лимите 500 уникальных ресурсов в `ResourceCheck.php`.
+- Тесты: в `ResourceCheckTest.php` добавлены 4 теста (300 ресурсов × 5 МБ с `HEAD 405`, 300 стилей × 5 МБ, проверка `maxBytes` / `416` / глубины CSS и проверка лимита ресурсов с дедупликацией по страницам); в `ShopCrawlerTest.php` добавлены 2 теста (60 отброшенных кандидатов × 5 МБ и общая страница корзины/оформления с одним запросом).
+- Целевые тесты (`ResourceCheckTest|ShopCrawlerTest|DiagnosticRunnerTest|MixedContentCheckTest`): 103 теста, 373 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 1016 тестов, 3662 assertions (пик памяти PHPUnit — 34 МБ). Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт). Живая диагностика сайтов и БД не запускались.
+**Что следующее:** Волна 4 — пункт 11 (`DiagnosticRunner.php`, `DiagnosticModel.php`, `SeoCheck.php`, `OutdatedCheck.php`, `StackDetector.php`, `bin/worker.php` — heartbeat, оптимистичная блокировка, лимиты и обработчик фатальных ошибок) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 13 плана ревью (`review-paln.md`, Волна 3) — добавлен rate limit на экспорт PDF и освобождение блокировки сессии на долгих и read-only запросах.
+- `src/Core/functions.php`: добавлен хелпер `closeSessionWrite()`, закрывающий активную сессию (`session_write_close()`).
+- `src/Controllers/ExportController.php`: добавлены константы `RATE_LIMIT_ACTION` (`pdf_export`), `RATE_LIMIT_MAX_ATTEMPTS` (`5`), `RATE_LIMIT_WINDOW_SECONDS` (`60`) и метод `takePdfRateLimitAttempt()` на базе атомарного `takeRateLimitAttempt()` с записью в журнал при превышении; в `download()` после проверки прав/статуса и списания попытки лимита вызывается `closeSessionWrite()` до рендера и запуска Chrome.
+- `src/Controllers/SettingsController.php`: в `saveBrowser()` перед `checkChrome()` вызывается `closeSessionWrite()`; в `save()` при `action=check` запись флеша о сохранении и предупреждения перенесена внутрь `checkConnection()` после выполнения сетевых проверок при закрытой сессии, чтобы параллельные вкладки не перехватывали флеш-сообщения.
+- `src/Controllers/DiagnosticController.php` (`status()`) и `src/Controllers/ScreenshotController.php` (`send()`): в начале методов вызывается `closeSessionWrite()`, чтобы опрос статуса и загрузка скриншотов не выстраивались в очередь за блокировкой файла сессии.
+- Тесты: в `ExportControllerTest.php` добавлена проверка отклонения 6-й попытки экспорта PDF в окне 60 с; в `FunctionsTest.php` добавлен тест освобождения блокировки через `closeSessionWrite()` и автоматического переоткрытия сессии при `setFlash()` с сохранением данных.
+- Целевые тесты (`ExportControllerTest|RateLimitTest|FunctionsTest`): 21 тест, 46 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 1010 тестов, 3633 assertions. Проверены маршруты OpenServer `/`, `/settings`, `/history` (HTTP 200). Живой экспорт PDF через Chrome не запускался. Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт).
+**Что следующее:** пункт 9 плана ревью (`ResourceCheck.php`, `DiagnosticRunner.php`, `ShopCrawler.php` — исключение хранения тел ответов в памяти и лимит 500 ресурсов).
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 14 плана ревью (`review-paln.md`, Волна 3) — добавлена защита периметра `Require local` и защита от утечки секретов в трассировках и логах.
+- `public/.htaccess`: добавлен блок `<IfModule mod_authz_core.c> Require local </IfModule>` для ограничения доступа только локальным хостом независимо от настроек OpenServer.
+- `#[\SensitiveParameter]`: добавлен к параметрам с ключами/токенами/секретами в `AiClient.php` (`validateAiKey`, `buildAiHeaders`, `sendAiRequest`, `redactAiKey`, `buildAiResultRecord`, `checkAiConnection`), `SpeedCheck.php` (`runSpeedCheck`), `PageSpeedService.php` (`isValidPageSpeedKey`, `buildPageSpeedHeaders`, `runPageSpeed`, `fetchPageSpeed`, `redactPageSpeedKey`), `VulnerabilityDatabases.php` (`updateWordfenceDatabase`) и `SettingsService.php` (`maskSecret`).
+- `src/Core/Logger.php`: добавлены `LOG_REDACTED`, `LOG_SECRET_ENV_NAMES`, `LOG_SECRET_MIN_LENGTH` (8) и `redactKnownSecrets()`; редактирование значений секретов применено к тексту сообщения в `logWrite()` и к строкам/`trace`/`Throwable` в `sanitizeLogContext()`; добавлен опциональный параметр `$targetFile` в `logWrite()` / `logException()` для безопасного тестирования без записи в основной лог.
+- `tests/Unit/LoggerTest.php`: создано 5 тестов — на `redactKnownSecrets()`, `sanitizeLogContext()` и отсутствие утечки ключей (включая первые 15 символов) в `trace` и записанном логе при исключениях внутри `checkAiConnection()`/`sendAiRequest()`, `runSpeedCheck()` и `updateWordfenceDatabase()`.
+- Целевые тесты (`LoggerTest|AiClientTest|SpeedCheckTest|PageSpeedServiceTest|SettingsServiceTest|VulnerabilityDatabasesTest`): 131 тест, 332 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 1008 тестов, 3622 assertions. Живой запрос `https://service-diagnostic-site.local/` через OpenServer вернул HTTP 200; проверка HTTP 403 со стороннего IP не выполнялась (нет второго хоста). Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт).
+**Что следующее:** пункт 13 плана ревью (`ExportController.php` — rate limit на PDF; освобождение блокировки сессии в контроллерах).
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 7 плана ревью (`review-paln.md`, Волна 2) — добавлен разбор `affected[].versions` в `OsvClient.php`. **Волна 2 завершена (пункты 6, 7).**
+- `OsvClient.php` (`parseOsvResponse()`, `parseOsvExactVersions()`): добавлена обработка точных версий из `affected[].versions`. Валидация выполняется через `normalizeVersion()`, не-версии (например, `dev-main`) отбрасываются, ведущая `v` снимается (с сохранением пре-релизных суффиксов для корректного сравнения), а версии, ещё не покрытые `ECOSYSTEM` / `SEMVER`-диапазонами этого `affected`, добавляются как точные диапазоны `[v, v]` с `from_inclusive = true`, `to_inclusive = true`.
+- `OsvClientTest.php`: добавлены 2 теста — на советы без `ranges` / только с `GIT` (включая `v`-префикс, пре-релиз и `dev-main`) и на отсутствие дублирования версий, уже покрытых `ECOSYSTEM`-диапазоном.
+- Целевые тесты (`OsvClientTest|VulnerabilityServiceTest|VulnerabilityCheckTest`): 53 теста, 293 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 1003 теста, 3598 assertions. Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт). Живой запрос к `api.osv.dev` не запускался.
+**Что следующее:** Волна 3 — пункт 14 (`public/.htaccess` с `Require local`, `#[\SensitiveParameter]` в `AiClient.php` и `SpeedCheck.php`, редактирование секретов в `Logger.php`) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 6 плана ревью (`review-paln.md`, Волна 2) — исправлено сравнение версий в `VersionService.php` (пропуск CVE и ложные срабатывания).
+- `VersionService.php`: добавлены константы `VERSION_LEADING_V_PATTERN`, `VERSION_TRAILING_ZEROS_PATTERN` и функция `canonicalVersionForCompare()`, которая приводит строку к нижнему регистру, снимает ведущую `v` и хвостовые `.0` в числовой части (`6.4.0` → `6.4`, `6.0.0-rc1` → `6-rc1`), сохраняя суффиксы пре-релизов (`-dev`, `-alpha`, `-beta`, `-rc`) и патчей (`-pN`). `compareVersions()` переведена на `canonicalVersionForCompare()`; `VERSION_PATTERN` и `normalizeVersion()` не менялись.
+- Тесты: добавлены кейсы в `VersionServiceTest` (11 случаев сравнения `.0`, пре-релизов и `-pN`), `VulnerabilityServiceTest` (границы с `.0` и пре-релизами в диапазонах) и `OutdatedCheckTest` (`eol_below = '5.0.0'` на версии `5.0` не даёт ложного `unsupported`).
+- Целевые тесты (`VersionServiceTest|VulnerabilityServiceTest|VulnerabilityCheckTest|OutdatedCheckTest|VersionFingerprintsTest|VersionSourcesTest`): 97 тестов, 412 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 1001 тест, 3584 assertions. Проверка на локальной базе Wordfence: для WordPress `6.4` число найденных уязвимостей выросло с 17 до 43 (совпадает с `6.4.0`), включая `CVE-2024-31211`. Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт).
+**Что следующее:** пункт 7 (`OsvClient.php` — поддержка `affected[].versions`) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 12 плана ревью (`review-paln.md`) — устранены падения воркера от `E_WARNING → ErrorException` (`parse_str`, `dns_get_record`, `filemtime`) и исключений резолвера. **Волна 1 завершена (пункты 3, 4, 5, 8, 10, 12).**
+- `StackDetector.php` (`extractQueryVersion()`): `parse_str()` (ограниченная `max_input_vars`) заменена разбором query через `preg_match_all()` только по ключам `ver`/`v`/`version`, с сохранением приоритета `STACK_VERSION_QUERY_KEYS`, перезаписи последнего значения и валидации `extractVersionString(..., true)`.
+- `UrlValidator.php` (`resolveHostIps()`): убрана гоночная проверка `checkdnsrr()`, а `dns_get_record(..., DNS_AAAA)` выполняется под перехватом `set_error_handler` + `try/catch` (без `@`), чтобы сбой AAAA не отменял проверку по A-записям и не ронял шаг. Добавлены опциональные `$ipv4Lookup` / `$aaaaLookup` для офлайн-тестирования.
+- `BrowserService.php` (`getBrowserProfileModifiedTime()`, `removeStaleBrowserProfiles()`): обращение к `filemtime()` вынесено в `getBrowserProfileModifiedTime()` под `set_error_handler` + `try/catch`, при гонке удаления профиля другим процессом возвращается `null`.
+- `HttpClient.php` (`prepareRequestTarget()`): вызов `$resolver($name)` обёрнут в `try/catch (Throwable)`, возвращая штатную ошибку `['error' => ...]`, не роняя шаг.
+- Тесты добавлены в `StackDetectorTest`, `UrlValidatorTest`, `BrowserServiceTest` и `HttpClientTest`. Целевые тесты: 172 теста, 615 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 988 тестов, 3566 assertions (0 предупреждений). Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт).
+**Что следующее:** Волна 2 — пункт 6 (`VersionService.php` — сравнение версий и пропуск CVE / ложные срабатывания) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 10 плана ревью (`review-paln.md`) — добавлен `use RuntimeException` в `ExportController`.
+- `ExportController.php`: добавлен импорт `use RuntimeException;` (без него `sendPdf()` искал несуществующий `App\Controllers\RuntimeException`); в `sendPdf()` проверка `is_file()` / `is_readable()` перенесена до `filesize()`, чтобы при отсутствующем файле не генерировалось предупреждение `stat failed`. Остальные контроллеры в `src/Controllers/` просканированы — неимпортированных глобальных классов не обнаружено.
+- `ExportControllerTest.php`: добавлены 2 теста `sendPdf()` (отсутствующий файл и пустой файл) на `RuntimeException` без PHP warnings.
+- `ExportControllerTest|PdfServiceTest`: 13 тестов, 44 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 984 теста, 3554 assertions. Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт).
+**Что следующее:** пункт 12 (`E_WARNING → ErrorException` в `StackDetector::extractQueryVersion()`, `UrlValidator::resolveHostIps()`, `BrowserService::removeStaleBrowserProfiles()` и `HttpClient::prepareRequestTarget()`) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 8 плана ревью (`review-paln.md`) — устранены падения на невалидном UTF-8 и слишком длинных URL.
+- `FindingModel.php` (`encodeFindingEvidence()`, `insertFinding()`) и `AiResultModel.php` (`encodeAiResultJson()`): добавлен флаг `JSON_INVALID_UTF8_SUBSTITUTE` при кодировании JSON, чтобы битые байты (например, с сайтов в windows-1251) не вызывали `JsonException`.
+- `PageModel.php` (`normalizeCheckedPageUrl()`, `insertCheckedPage()`): добавлена константа `CHECKED_PAGE_URL_MAX_LENGTH = 2048`, очистка URL от невалидного UTF-8 через `mb_scrub(..., 'UTF-8')` и усечение до 2048 символов под колонку `checked_pages.url`.
+- `FindingFactory.php` (`makeFinding()`): добавлена очистка `title` и `location` через `mb_scrub(..., 'UTF-8')` (с явным `'UTF-8'` в `mb_substr()`).
+- `StackDetector.php` (`addStackSignal()`, `detectThemesAndPlugins()`, `finalizeStackItems()`): добавлен `mb_scrub(..., 'UTF-8')` для имён тем/плагинов после `rawurldecode()`, версий и деталей доказательств стека.
+- Тесты: создан `tests/Unit/ModelEncodingTest.php` (3 теста), добавлены тесты в `FindingFactoryTest` и `StackDetectorTest`. Целевые тесты (`ModelEncodingTest|FindingFactoryTest|StackDetectorTest`): 57 тестов, 388 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 982 теста, 3550 assertions. Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт). Живая диагностика сайтов в windows-1251 и запись в MySQL отложены на общую E2E-проверку.
+**Что следующее:** пункт 10 (`ExportController.php` — `use RuntimeException`) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 5 плана ревью (`review-paln.md`) — устранена возможность DNS-rebinding из-за рассинхрона `CURLOPT_URL` и `CURLOPT_RESOLVE`.
+- `HttpClient.php` (`prepareRequestTarget()`, `httpRequest()`): добавлено отклонение URL с пробельными/управляющими символами (включая NBSP и не-UTF-8 байты) и портом вне диапазона `1..65535`; `prepareRequestTarget()` теперь пересобирает и возвращает канонический `url` из нормализованного хоста (без конечной точки, в нижнем регистре, IDN → punycode, IPv6 в скобках, без `#фрагмента`). `httpRequest()` передаёт в транспорт и сохраняет в `$currentUrl` именно этот канонический `url`, совпадающий с ключом `CURLOPT_RESOLVE`.
+- `HttpClientTest.php`: добавлены тесты на канонизацию хоста и отбрасывание фрагмента, преобразование IDN в punycode, отклонение пробелов/управляющих символов/порта `0` до обращения к DNS, а также сквозной тест `httpRequest()` с редиректом на кириллический домен.
+- `HttpClientTest|SslCheckTest`: 65 тестов, 131 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 977 тестов, 3523 assertions. Новых записей в `storage/logs/app.log` нет (размер остался 10 160 байт). Живой curl к внешнему хосту в сеть не запускался.
+**Что следующее:** пункт 8 (`FindingModel.php`, `AiResultModel.php`, `FindingFactory.php`, `PageModel.php`, `StackDetector.php` — невалидный UTF-8 и длинные URL) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 4 плана ревью (`review-paln.md`) — устранена уязвимость к gzip-бомбе в `SeoCheck::parseSitemap()`.
+- `SeoCheck.php`: подключён `HttpClient.php` для гарантированного наличия `HTTP_MAX_BODY_BYTES`, добавлена константа `SEO_SITEMAP_MAX_DECODED_BYTES = HTTP_MAX_BODY_BYTES` (5 МБ) и функция `decodeSitemapGzip()`, вызывающая `gzdecode($body, $maxBytes + 1)` под временным перехватом предупреждений (без `@`). При превышении лимита или повреждении потока `parseSitemap()` возвращает `null`, что обрабатывается шагом SEO как ошибка чтения sitemap (`sitemap_error`) без OOM и падения воркера.
+- `SeoCheckTest.php`: добавлены тесты на ~64 МБ потоковую gzip-бомбу (проверка `null`, роста пика памяти `memory_get_peak_usage()` и состояния `sitemap_error` в `runSeoCheck()`), границу лимита (`100`/`101` байт) и повреждённый gzip-поток.
+- `SeoCheckTest`: 32 теста, 104 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 969 тестов, 3497 assertions (0 предупреждений). Отдельная проверка в CLI под обработчиком `E_WARNING → ErrorException` на ~100 МБ gzip-бомбе (101 998 байт сжатых): `parseSitemap()` вернула `null` с общим пиком памяти 7.68 МБ (`+5.65 МБ`). Новых ошибок/предупреждений в `storage/logs/app.log` нет (размер остался 10 160 байт).
+**Что следующее:** пункт 5 (`HttpClient.php` — DNS-rebinding и рассинхрон `CURLOPT_URL` и `CURLOPT_RESOLVE`) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** выполнен пункт 3 плана ревью (`review-paln.md`) — устранено переполнение `findings.details` и падение воркера при сохранении находок.
+- `FindingFactory.php` (`makeFinding()`): добавлена константа `FINDING_DETAILS_MAX_BYTES = 60000`; ненулевой `details` очищается через `mb_scrub(..., 'UTF-8')` и безопасно усекается по байтам через `mb_strcut(..., 0, FINDING_DETAILS_MAX_BYTES, 'UTF-8')` с запасом под `TEXT` (65 535 байт).
+- `VulnerabilityCheck.php` (`makeVulnerabilityFinding()`): добавлена константа `VULNERABILITY_DETAILS_MAX_BLOCKS = 15`; уязвимости сортируются по скорректированной серьёзности и убыванию CVSS, в `details` выводятся первые 15 блоков и строка о количестве остальных, а полный список сохраняется в `evidence['vulnerabilities']`. На локальной базе Wordfence размер `details` снизился с 83 675 до 18 778 байт для WordPress 6.0.0 (65 уязвимостей) и с 149 988 до 15 082 байт для WordPress 4.7 (142 уязвимости).
+- `DiagnosticRunner.php` (`finalizeStepPersistence()`, `executeStepsWithDb()`): запись каждой находки обёрнута в `try/catch`; ошибка БД логируется и переводит шаг в `failed` (с префиксом `Не удалось сохранить находки: `), не прерывая сохранение остальных находок, вызов `finishStep()`, обновление прогресса и продолжение цикла шагов.
+- Целевые тесты (`FindingFactoryTest`, `VulnerabilityCheckTest`, `DiagnosticRunnerTest`): 70 тестов, 325 assertions. Полный прогон PHPUnit на PHP 8.3 OpenServer: 967 тестов, 3487 assertions. Новых ошибок/предупреждений в `storage/logs/app.log` нет (размер файла не изменился — 10 160 байт). Живая диагностика сайтов и запись в MySQL не запускались (отложено на общую E2E-проверку).
+**Что следующее:** пункт 4 (`SeoCheck::parseSitemap()` — защита от gzip-бомбы) после подтверждения владельца.
+
+---
+
+**Дата:** 20.11.2026
+**Что сделано:** актуализирована документация разработки для единой и согласованной работы в Antigravity и Claude Code.
+- `AGENTS.md` и `CLAUDE.md`: сделаны единой точкой входа без дублирования (`CLAUDE.md` подключает `@AGENTS.md`), добавлены фактические инварианты среды (PHP 8.3 OpenServer, без входа/users, UI на Tabler, кросс-средовая проверка UI).
+- `.claude/rules/general.md`, `php.md`, `design.md`: заменены Cursor-ключевые слова (`alwaysApply`/`globs`) на нативный синтаксис Claude Code (`paths:`), убраны устаревшие шаблонные правила (`design-template`, `.docs/ref/prototypes/`, `tooManyAttempts()`/`hitRateLimit()`, логин/роли/деньги), приведены в соответствие с фактическим кодом (`takeRateLimitAttempt()`, `App\Controllers`, Tabler 1.6.1, `$isPdfExport`, PHP 8.3 OpenServer).
+- `.docs/dod-global.md`, `.docs/prompts/*.md`, `current-pipeline.md`, `README.md`: синхронизированы с фактическим проектом и поддержкой как плановых фаз, так и отдельных правок/багфиксов.
+- Прогон полного набора PHPUnit на PHP 8.3 OpenServer: 964 теста, 3432 assertions (код приложения не менялся).
+**Что следующее:** продолжать разработку или исправления по ревью в Antigravity или Claude Code по обновлённому регламенту.
+
+---
+
 **Дата:** 19.11.2026
 **Что сделано:** исправлена гонка файлового rate limit по результатам ревью приложения.
 - Раздельные проверка и увеличение счётчика заменены атомарной операцией под эксклюзивной файловой блокировкой;

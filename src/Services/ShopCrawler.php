@@ -107,12 +107,13 @@ function crawlShopPages(array $context, callable $request, ?array $patterns = nu
 
     $productUrl = $context['diagnostic']['product_url'] ?? null;
     if (is_string($productUrl) && $productUrl !== '') {
-        $response = fetchCrawlPage($crawl, $productUrl);
+        $response = fetchCrawlPage($crawl, $productUrl, $pages);
         $pages['product'] = buildCrawlPage('product', $productUrl, $response, CRAWL_FOUND_BY_MANUAL);
         $finding = buildManualProductFinding($productUrl, $response);
         if ($finding !== null) {
             $findings[] = $finding;
         }
+        unset($response);
     }
 
     $categoryParsed = null;
@@ -122,21 +123,25 @@ function crawlShopPages(array $context, callable $request, ?array $patterns = nu
                 break;
             }
             $tried['category']++;
-            $response = fetchCrawlPage($crawl, $candidate['url']);
+            $response = fetchCrawlPage($crawl, $candidate['url'], $pages);
             if (!isSuccessfulStatus($response['status'])) {
+                unset($response);
                 continue;
             }
             $parsed = parseHtml((string) $response['body'], (string) $response['final_url']);
             $type = classifyShopPage((string) $response['body'], $parsed, $rules, $siteHost);
+            $crawl['responses'][normalizeCrawlUrl($candidate['url'])]['type'] = $type ?? 'other';
 
             if ($type === 'category' && !isset($pages['category'])) {
                 $pages['category'] = buildCrawlPage('category', $candidate['url'], $response, $candidate['found_by']);
                 $categoryParsed = $parsed;
+                unset($response, $parsed);
                 break;
             }
             if ($type === 'product' && !isset($pages['product'])) {
                 $pages['product'] = buildCrawlPage('product', $candidate['url'], $response, $candidate['found_by']);
             }
+            unset($response, $parsed);
         }
     }
 
@@ -144,22 +149,31 @@ function crawlShopPages(array $context, callable $request, ?array $patterns = nu
         $sources = array_values(array_filter([$categoryParsed, $homeParsed]));
         $anchors = array_merge(...array_map(static fn (array $parsed): array => $parsed['anchors'], $sources));
         foreach (rankCrawlLinks($anchors, 'product', $rules, $siteHost, $exclude) as $candidate) {
+            $key = normalizeCrawlUrl($candidate['url']);
+            if (isset($crawl['responses'][$key]['type'])) {
+                continue;
+            }
             $tried['product']++;
-            $response = fetchCrawlPage($crawl, $candidate['url']);
+            $response = fetchCrawlPage($crawl, $candidate['url'], $pages);
             if (!isSuccessfulStatus($response['status'])) {
+                unset($response);
                 continue;
             }
             $parsed = parseHtml((string) $response['body'], (string) $response['final_url']);
-            if (classifyShopPage((string) $response['body'], $parsed, $rules, $siteHost) === 'product') {
+            $type = classifyShopPage((string) $response['body'], $parsed, $rules, $siteHost);
+            $crawl['responses'][$key]['type'] = $type ?? 'other';
+            if ($type === 'product') {
                 $pages['product'] = buildCrawlPage('product', $candidate['url'], $response, $candidate['found_by']);
+                unset($response, $parsed);
                 break;
             }
+            unset($response, $parsed);
         }
     }
 
     $linkSources = array_merge($homeParsed['anchors'], $categoryParsed['anchors'] ?? []);
     foreach (['cart', 'checkout'] as $type) {
-        $found = findServicePage($crawl, $type, $rules, $homeUrl, $siteHost, $linkSources);
+        $found = findServicePage($crawl, $type, $rules, $homeUrl, $siteHost, $linkSources, $pages);
         if ($found['page'] !== null) {
             $pages[$type] = $found['page'];
         } else {
@@ -389,13 +403,21 @@ function classifyShopPage(string $html, array $parsed, array $rules, string $sit
  * Засчитывается ответ 2xx своего сайта, не главная, и в HTML есть признак страницы («мягкий 404» с кодом 200
  * не проходит).
  *
- * @param array<string, mixed>                        $crawl
- * @param array<string, mixed>                        $rules
- * @param list<array{url: string, text: string}>      $anchors
+ * @param array<string, mixed>                $crawl
+ * @param array<string, mixed>                $rules
+ * @param list<array{url: string, text: string}> $anchors
+ * @param array<string, array<string, mixed>> $selectedPages уже выбранные страницы (с телами)
  * @return array{page: ?array, tried: int}
  */
-function findServicePage(array &$crawl, string $type, array $rules, string $homeUrl, string $siteHost, array $anchors): array
-{
+function findServicePage(
+    array &$crawl,
+    string $type,
+    array $rules,
+    string $homeUrl,
+    string $siteHost,
+    array $anchors,
+    array $selectedPages = []
+): array {
     $origin = buildCrawlOrigin($homeUrl);
     $candidates = [];
     foreach ($rules['paths'][$type] as $path => $foundBy) {
@@ -419,7 +441,7 @@ function findServicePage(array &$crawl, string $type, array $rules, string $home
     $tried = 0;
     foreach ($candidates as $candidate) {
         $tried++;
-        $response = fetchCrawlPage($crawl, $candidate['url']);
+        $response = fetchCrawlPage($crawl, $candidate['url'], $selectedPages);
         $finalUrl = (string) ($response['final_url'] ?: $candidate['url']);
 
         if (
@@ -430,29 +452,72 @@ function findServicePage(array &$crawl, string $type, array $rules, string $home
         ) {
             return ['page' => buildCrawlPage($type, $candidate['url'], $response, $candidate['found_by']), 'tried' => $tried];
         }
+        unset($response);
     }
 
     return ['page' => null, 'tried' => $tried];
 }
 
 /**
- * Запрос с кэшем: один адрес — один запрос за шаг. Запоминает первый код защиты от ботов.
+ * Возвращает данные уже выбранной страницы по нормализованному URL, если её полное тело сохранено в `$pages`.
  *
- * @param array<string, mixed> $crawl
+ * @param array<string, array<string, mixed>> $pages
+ * @return array<string, mixed>|null
+ */
+function findSelectedCrawlPage(array $pages, string $urlKey): ?array
+{
+    foreach ($pages as $page) {
+        if (
+            normalizeCrawlUrl((string) ($page['url'] ?? '')) === $urlKey
+            || normalizeCrawlUrl((string) ($page['final_url'] ?? '')) === $urlKey
+        ) {
+            return [
+                'final_url' => (string) ($page['final_url'] ?? $page['url']),
+                'status'    => $page['status'],
+                'time_ms'   => (int) $page['time_ms'],
+                'error'     => $page['error'],
+                'headers'   => $page['headers'],
+                'body'      => (string) $page['body'],
+                'truncated' => (bool) $page['truncated'],
+            ];
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Запрос с кэшем: один адрес — один запрос за шаг. В кэше хранятся только метаданные (без `body` и `headers`);
+ * тело доступно только на время классификации или из уже выбранных страниц. Запоминает первый код защиты от ботов.
+ *
+ * @param array<string, mixed>                $crawl
+ * @param array<string, array<string, mixed>> $selectedPages
  * @return array<string, mixed> ответ как у httpRequest()
  */
-function fetchCrawlPage(array &$crawl, string $url): array
+function fetchCrawlPage(array &$crawl, string $url, array $selectedPages = []): array
 {
     $key = normalizeCrawlUrl($url);
     if (isset($crawl['responses'][$key])) {
-        return $crawl['responses'][$key];
+        $selected = findSelectedCrawlPage($selectedPages, $key);
+        if ($selected !== null) {
+            return $selected + ['cached' => true];
+        }
+
+        return $crawl['responses'][$key] + ['headers' => [], 'body' => '', 'cached' => true];
     }
 
     $response = ($crawl['request'])($url) + [
         'final_url' => $url, 'status' => null, 'headers' => [], 'body' => '', 'truncated' => false,
         'redirects' => [], 'time_ms' => 0, 'error' => null,
     ];
-    $crawl['responses'][$key] = $response;
+    $crawl['responses'][$key] = [
+        'final_url' => (string) ($response['final_url'] ?: $url),
+        'status'    => $response['status'],
+        'time_ms'   => (int) $response['time_ms'],
+        'error'     => $response['error'],
+        'truncated' => (bool) $response['truncated'],
+        'type'      => null,
+    ];
     $crawl['requests']++;
 
     if ($crawl['blocked'] === null && in_array($response['status'], CRAWL_BOT_PROTECTION_CODES, true)) {
@@ -462,7 +527,7 @@ function fetchCrawlPage(array &$crawl, string $url): array
         ($crawl['onProgress'])($crawl['requests']);
     }
 
-    return $response;
+    return $response + ['cached' => false];
 }
 
 /**

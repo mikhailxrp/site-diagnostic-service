@@ -21,6 +21,7 @@ const OSV_HTTP_OK      = 200;
 const OSV_VERSION_RANGE_TYPES = ['ECOSYSTEM', 'SEMVER'];
 /** `introduced: "0"` — уязвимы все версии с самой первой */
 const OSV_FIRST_VERSION = '0';
+const OSV_LEADING_V_PATTERN = '~^v(?=\d)~i';
 
 /** Серьёзность GitHub Advisory → наша */
 const OSV_SEVERITY_MAP = ['CRITICAL' => 'critical', 'HIGH' => 'high', 'MODERATE' => 'medium', 'MEDIUM' => 'medium', 'LOW' => 'low'];
@@ -79,14 +80,19 @@ function parseOsvResponse(string $body, string $package): array
             if (strcasecmp((string) ($affected['package']['name'] ?? ''), $package) !== 0) {
                 continue;
             }
+            $affectedRanges = [];
             foreach (is_array($affected['ranges'] ?? null) ? $affected['ranges'] : [] as $range) {
                 if (!in_array($range['type'] ?? null, OSV_VERSION_RANGE_TYPES, true)) {
                     continue;
                 }
                 $parsed = parseOsvEvents(is_array($range['events'] ?? null) ? $range['events'] : []);
-                $ranges = [...$ranges, ...$parsed['ranges']];
+                $affectedRanges = [...$affectedRanges, ...$parsed['ranges']];
                 $fixed = [...$fixed, ...$parsed['fixed']];
             }
+            if (is_array($affected['versions'] ?? null)) {
+                $affectedRanges = [...$affectedRanges, ...parseOsvExactVersions($affected['versions'], $affectedRanges)];
+            }
+            $ranges = [...$ranges, ...$affectedRanges];
         }
 
         $severity = strtoupper((string) ($vuln['database_specific']['severity'] ?? ''));
@@ -142,4 +148,33 @@ function parseOsvEvents(array $events): array
     }
 
     return ['ranges' => $ranges, 'fixed' => $fixed];
+}
+
+/**
+ * Точные версии из `affected[].versions`, не покрытые уже разобранными диапазонами этого же `affected`.
+ * Пре-релизные суффиксы сохраняются (в отличие от `normalizeVersion()`), не-версии вроде `dev-main` отбрасываются.
+ *
+ * @param list<mixed>                $versions
+ * @param list<array<string, mixed>> $coveredRanges уже разобранные диапазоны `ECOSYSTEM` / `SEMVER`
+ * @return list<array{from: string, to: string, from_inclusive: bool, to_inclusive: bool}>
+ */
+function parseOsvExactVersions(array $versions, array $coveredRanges): array
+{
+    $ranges = [];
+    foreach ($versions as $raw) {
+        if (!is_string($raw)) {
+            continue;
+        }
+        $trimmed = trim($raw);
+        if ($trimmed === '' || normalizeVersion($trimmed) === null) {
+            continue;
+        }
+        $version = (string) preg_replace(OSV_LEADING_V_PATTERN, '', $trimmed);
+        if ($coveredRanges !== [] && isVersionVulnerable($version, ['ranges' => $coveredRanges])) {
+            continue;
+        }
+        $ranges[] = ['from' => $version, 'to' => $version, 'from_inclusive' => true, 'to_inclusive' => true];
+    }
+
+    return $ranges;
 }

@@ -39,9 +39,18 @@ require_once ROOT_PATH . '/src/Services/Ai/VisualAnalysis.php';
 require_once ROOT_PATH . '/src/Services/Ai/SummaryAnalysis.php';
 require_once ROOT_PATH . '/src/Services/Ai/ClientTextAnalysis.php';
 require_once ROOT_PATH . '/src/Services/AiModels.php';
+require_once ROOT_PATH . '/src/Services/DiagnosticNoLongerRunningException.php';
 
-const HEARTBEAT_STALE_SECONDS = 600;  // 10 минут без отметки воркера → диагностика прервана
-const STEP_MESSAGE_MAX_LENGTH = 1000; // как diagnostic_steps.message VARCHAR(1000)
+const HEARTBEAT_STALE_SECONDS        = 600;  // 10 минут без отметки воркера → диагностика прервана
+const HEARTBEAT_MIN_INTERVAL_SECONDS = 30;   // обновлять heartbeat не чаще раза в 30 секунд
+const STEP_MESSAGE_MAX_LENGTH        = 1000; // как diagnostic_steps.message VARCHAR(1000)
+
+const WORKER_FATAL_ERROR_TYPES            = [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_PARSE];
+const WORKER_FATAL_MEMORY_MARKER          = 'Allowed memory size';
+const WORKER_FATAL_OOM_STEP_MESSAGE       = 'Шаг прерван: воркеру не хватило памяти.';
+const WORKER_FATAL_OOM_DIAGNOSTIC_MESSAGE = 'Воркер аварийно завершился: недостаточно памяти.';
+const WORKER_FATAL_STEP_MESSAGE           = 'Шаг прерван: фатальная ошибка воркера.';
+const WORKER_FATAL_DIAGNOSTIC_MESSAGE     = 'Воркер аварийно завершился из-за фатальной ошибки.';
 
 const PROGRESS_MAX = 100;
 
@@ -49,8 +58,9 @@ const STEP_STATUS_DONE    = 'done';
 const STEP_STATUS_SKIPPED = 'skipped';
 const STEP_STATUS_FAILED  = 'failed';
 
-const STEP_STOPPED_MESSAGE         = 'Пропущено: шаг «%s» остановил проверку.';
-const AI_STEP_CODE_PREFIX          = 'ai_';
+const STEP_STOPPED_MESSAGE           = 'Пропущено: шаг «%s» остановил проверку.';
+const STEP_SAVE_FINDINGS_ERROR_PREFIX = 'Не удалось сохранить находки: ';
+const AI_STEP_CODE_PREFIX            = 'ai_';
 
 /**
  * Шаги диагностики по порядку. Обработчик получает контекст и возвращает
@@ -103,13 +113,14 @@ function getAiSteps(): array
  */
 function runAvailabilityStep(array $context): array
 {
+    $diagnosticId = (int) $context['diagnostic']['id'];
     $result = runAvailabilityCheck(
         $context,
-        static fn (string $url): array => httpRequest($url),
-        static fn (string $host, bool $trusted): array => inspectSslCertificate($host, $trusted)
+        withHeartbeat(static fn (string $url): array => httpRequest($url), $diagnosticId),
+        withHeartbeat(static fn (string $host, bool $trusted): array => inspectSslCertificate($host, $trusted), $diagnosticId)
     );
 
-    $diagnosticId = (int) $context['diagnostic']['id'];
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
     $home = $result['facts']['home'];
     $botProtection = $home['status'] !== null ? detectBotProtection($home) : null;
 
@@ -125,9 +136,12 @@ function runAvailabilityStep(array $context): array
     $result['facts']['home']['bot_protection'] = $botProtection;
     $result['findings'] = assignPageIdToFindings($result['findings'], $pageId, [$home['url'], $home['final_url']]);
 
-    updateDiagnosticSummary($diagnosticId, $result['summary'] + [
-        'blocked' => buildBlockedPagesSummary([$pageId => $botProtection]),
-    ]);
+    assertDiagnosticRunning(
+        $diagnosticId,
+        updateDiagnosticSummary($diagnosticId, $result['summary'] + [
+            'blocked' => buildBlockedPagesSummary([$pageId => $botProtection]),
+        ])
+    );
 
     return $result;
 }
@@ -141,9 +155,13 @@ function runAvailabilityStep(array $context): array
  */
 function runStackStep(array $context): array
 {
-    $result = runStackCheck($context, static fn (string $url): array => httpRequest($url));
-
     $diagnosticId = (int) $context['diagnostic']['id'];
+    $result = runStackCheck(
+        $context,
+        withHeartbeat(static fn (string $url): array => httpRequest($url), $diagnosticId)
+    );
+
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
     foreach ($result['facts']['items'] ?? [] as $index => $item) {
         $result['facts']['items'][$index]['stack_item_id'] = insertStackItem($diagnosticId, $item);
     }
@@ -160,15 +178,23 @@ function runStackStep(array $context): array
  */
 function runOutdatedStep(array $context): array
 {
-    $result = runOutdatedCheck($context, static fn (string $url): array => httpRequest($url));
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $result = runOutdatedCheck(
+        $context,
+        withHeartbeat(static fn (string $url): array => httpRequest($url), $diagnosticId)
+    );
     if ($result['status'] !== STEP_STATUS_DONE) {
         return $result;
     }
 
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
     foreach ($result['facts']['latest'] as $stackItemId => $latestVersion) {
         updateStackItemLatestVersion((int) $stackItemId, $latestVersion);
     }
-    updateDiagnosticSummary((int) $context['diagnostic']['id'], ['databases' => $result['facts']['databases']]);
+    assertDiagnosticRunning(
+        $diagnosticId,
+        updateDiagnosticSummary($diagnosticId, ['databases' => $result['facts']['databases']])
+    );
 
     return $result;
 }
@@ -182,9 +208,16 @@ function runOutdatedStep(array $context): array
  */
 function runVulnerabilitiesStep(array $context): array
 {
-    $result = runVulnerabilityCheck($context);
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $result = runVulnerabilityCheck(
+        $context,
+        api: withHeartbeat(static fn (string $url, ?array $json): array => httpApiRequest($url, $json), $diagnosticId)
+    );
     if ($result['status'] === STEP_STATUS_DONE && $result['facts']['databases'] !== []) {
-        updateDiagnosticSummary((int) $context['diagnostic']['id'], ['databases' => $result['facts']['databases']]);
+        assertDiagnosticRunning(
+            $diagnosticId,
+            updateDiagnosticSummary($diagnosticId, ['databases' => $result['facts']['databases']])
+        );
     }
 
     return $result;
@@ -203,14 +236,15 @@ function runCrawlStep(array $context): array
 
     $result = crawlShopPages(
         $context,
-        static fn (string $url): array => httpRequest($url),
+        withHeartbeat(static fn (string $url): array => httpRequest($url), $diagnosticId),
         null,
-        static fn (int $requests) => touchDiagnosticHeartbeat($diagnosticId)
+        null
     );
     if ($result['status'] !== STEP_STATUS_DONE) {
         return $result;
     }
 
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
     $blocked = [];
     foreach ($result['facts']['pages'] as $type => $page) {
         $botProtection = $page['status'] !== null ? detectBotProtection($page) : null;
@@ -228,13 +262,16 @@ function runCrawlStep(array $context): array
         $result['findings'] = assignPageIdToFindings($result['findings'], $pageId, [$page['url'], $page['final_url']]);
     }
 
-    updateDiagnosticSummary($diagnosticId, [
-        'pages'   => [
-            'platforms' => $result['facts']['platforms'],
-            'missing'   => (object) $result['facts']['missing'],
-        ],
-        'blocked' => buildBlockedPagesSummary($blocked),
-    ]);
+    assertDiagnosticRunning(
+        $diagnosticId,
+        updateDiagnosticSummary($diagnosticId, [
+            'pages'   => [
+                'platforms' => $result['facts']['platforms'],
+                'missing'   => (object) $result['facts']['missing'],
+            ],
+            'blocked' => buildBlockedPagesSummary($blocked),
+        ])
+    );
 
     return $result;
 }
@@ -253,8 +290,17 @@ function runResourcesStep(array $context): array
 
     $result = runResourceCheck(
         $context,
-        static fn (string $url, string $method): array => httpRequest($url, $method),
-        static fn (int $checked) => touchDiagnosticHeartbeat($diagnosticId)
+        withHeartbeat(
+            static fn (string $url, string $method, ?int $maxBytes = null): array => httpRequest(
+                $url,
+                $method,
+                null,
+                null,
+                $maxBytes
+            ),
+            $diagnosticId
+        ),
+        null
     );
 
     return addPageErrorFindings($result, $context);
@@ -269,21 +315,25 @@ function runResourcesStep(array $context): array
  */
 function runSeoStep(array $context): array
 {
-    $result = runSeoCheck($context, static fn (string $url): array => httpRequest($url));
+    $diagnosticId = (int) $context['diagnostic']['id'];
+    $result = runSeoCheck($context, withHeartbeat(static fn (string $url): array => httpRequest($url), $diagnosticId));
 
     if ($result['status'] === STEP_STATUS_DONE) {
-        updateDiagnosticSummary((int) $context['diagnostic']['id'], ['seo' => [
-            'robots'  => $result['facts']['robots'],
-            'sitemap' => $result['facts']['sitemap'],
-        ]]);
+        assertDiagnosticRunning(
+            $diagnosticId,
+            updateDiagnosticSummary($diagnosticId, ['seo' => [
+                'robots'  => $result['facts']['robots'],
+                'sitemap' => $result['facts']['sitemap'],
+            ]])
+        );
     }
 
     return $result;
 }
 
 /**
- * Шаг `exposed_files` с настоящей сетью: каждый путь читается не больше EXPOSED_FILE_MAX_BYTES, heartbeat — после
- * каждого запроса. Находки сохраняет `runDiagnostic()`.
+ * Шаг `exposed_files` с настоящей сетью: каждый путь читается не больше EXPOSED_FILE_MAX_BYTES, heartbeat — по времени
+ * через `withHeartbeat()`. Находки сохраняет `runDiagnostic()`.
  *
  * @param array<string, mixed> $context
  * @return array<string, mixed>
@@ -294,8 +344,11 @@ function runExposedFilesStep(array $context): array
 
     return runExposedFilesCheck(
         $context,
-        static fn (string $url, int $maxBytes): array => httpRequest($url, 'GET', null, null, $maxBytes),
-        static fn () => touchDiagnosticHeartbeat($diagnosticId)
+        withHeartbeat(
+            static fn (string $url, int $maxBytes): array => httpRequest($url, 'GET', null, null, $maxBytes),
+            $diagnosticId
+        ),
+        null
     );
 }
 
@@ -342,19 +395,18 @@ function runBrowserStep(array $context): array
                     'page_id' => $page['page_id'],
                 ];
                 $loads[] = storeLoadScreenshot($load, $diagnosticId);
-                touchDiagnosticHeartbeat($diagnosticId);
+                assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
             }
         }
     } finally {
         closeBrowser($session);
     }
 
-    $recheck = static function (string $url) use ($diagnosticId): array {
+    $recheck = withHeartbeat(static function (string $url): array {
         $response = httpRequest($url);
-        touchDiagnosticHeartbeat($diagnosticId);
 
         return ['status' => $response['status'], 'error' => $response['error']];
-    };
+    }, $diagnosticId);
     // «Свой домен» — по главной: даже если она за защитой от ботов и в браузере не открывалась
     $home = $context['facts']['availability']['home'] ?? [];
     $homeUrl = (string) (($home['final_url'] ?? '') !== '' ? $home['final_url'] : ($selection['open'][0]['url'] ?? ''));
@@ -426,7 +478,12 @@ function runCheckoutStep(array $context): array
     );
 
     try {
-        $session = launchBrowser(resolveChromePath(getSetting(CHROME_PATH_SETTING)), $diagnosticId, BROWSER_STARTUP_TIMEOUT_SECONDS);
+        $session = launchBrowser(
+            resolveChromePath(getSetting(CHROME_PATH_SETTING)),
+            $diagnosticId,
+            BROWSER_STARTUP_TIMEOUT_SECONDS,
+            buildCheckoutBrowserOptions()
+        );
     } catch (RuntimeException $e) {
         return ['status' => STEP_STATUS_SKIPPED, 'message' => BROWSER_UNAVAILABLE_PREFIX . $e->getMessage()];
     }
@@ -437,17 +494,20 @@ function runCheckoutStep(array $context): array
             $target,
             $rules,
             (string) $context['diagnostic']['host'],
-            static fn () => touchDiagnosticHeartbeat($diagnosticId)
+            static function () use ($diagnosticId): void {
+                assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
+            }
         );
     } finally {
         closeBrowser($session);
     }
 
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
     $scenario['steps'] = storeCheckoutSteps($scenario['steps'], $diagnosticId);
     $home = $context['facts']['availability']['home'] ?? [];
     $homeUrl = (string) (($home['final_url'] ?? '') !== '' ? $home['final_url'] : $context['diagnostic']['url']);
     $result = buildCheckoutResult($scenario, $homeUrl);
-    updateDiagnosticSummary($diagnosticId, ['checkout' => $result['summary']]);
+    assertDiagnosticRunning($diagnosticId, updateDiagnosticSummary($diagnosticId, ['checkout' => $result['summary']]));
 
     if ($scenario['requests']['checkout_sent'] > 0 || $scenario['requests']['errors'] > 0) {
         logWarning('Сценарий заказа: изменяющий запрос на оформлении не заблокирован или ошибка перехвата', [
@@ -526,20 +586,21 @@ function runPageSpeedStep(array $context): array
     $result = runSpeedCheck(
         $context,
         env('PAGESPEED_API_KEY', ''),
-        static fn (string $url, array $headers): array => httpApiRequest(
-            $url,
-            null,
-            PAGESPEED_TIMEOUT_SECONDS,
-            HTTP_API_MAX_BODY_BYTES,
-            $headers
+        withHeartbeat(
+            static fn (string $url, array $headers): array => httpApiRequest(
+                $url,
+                null,
+                PAGESPEED_TIMEOUT_SECONDS,
+                HTTP_API_MAX_BODY_BYTES,
+                $headers
+            ),
+            $diagnosticId
         ),
-        static function () use ($diagnosticId): void {
-            touchDiagnosticHeartbeat($diagnosticId);
-        }
+        null
     );
 
     if (isset($result['facts']['pagespeed'])) {
-        updateDiagnosticSummary($diagnosticId, ['pagespeed' => $result['facts']['pagespeed']]);
+        assertDiagnosticRunning($diagnosticId, updateDiagnosticSummary($diagnosticId, ['pagespeed' => $result['facts']['pagespeed']]));
     }
 
     return $result;
@@ -564,6 +625,7 @@ function runAiProblemStep(array $context): array
 
     $diagnosticId = (int) $context['diagnostic']['id'];
     $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    assertDiagnosticRunning($diagnosticId, $diagnostic !== null && ($diagnostic['status'] ?? null) === 'running');
     $summary = is_string($diagnostic['summary_json'] ?? null) ? json_decode($diagnostic['summary_json'], true) : null;
 
     $analysis = runProblemAnalysis(
@@ -577,10 +639,10 @@ function runAiProblemStep(array $context): array
         resolveModelSetting(getSetting(AI_PROBLEM_MODEL_SETTING)),
         $key,
         loadProblemPrompt(),
-        makeAiSender($key),
+        withHeartbeat(makeAiSender($key), $diagnosticId),
         static fn (array $record): int => insertAiResult($diagnosticId, $record)
     );
-    touchDiagnosticHeartbeat($diagnosticId);
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
 
     return [
         'status'   => STEP_STATUS_DONE,
@@ -608,6 +670,7 @@ function runAiVisualStep(array $context): array
 
     $diagnosticId = (int) $context['diagnostic']['id'];
     $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    assertDiagnosticRunning($diagnosticId, $diagnostic !== null && ($diagnostic['status'] ?? null) === 'running');
     $summary = is_string($diagnostic['summary_json'] ?? null) ? json_decode($diagnostic['summary_json'], true) : null;
     // Снимки сценария заказа не отправляются: картинки — самая дорогая часть ИИ, страницы уже сняты шагом `browser`
     $selection = selectVisualPages(
@@ -630,10 +693,12 @@ function runAiVisualStep(array $context): array
         $model,
         $key,
         loadVisualPrompt(),
-        makeAiSender($key),
+        withHeartbeat(makeAiSender($key), $diagnosticId),
         static fn (array $record): int => insertAiResult($diagnosticId, $record),
         'loadVisualImage',
-        static fn () => touchDiagnosticHeartbeat($diagnosticId)
+        static function () use ($diagnosticId): void {
+            assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
+        }
     );
 
     return [
@@ -662,6 +727,7 @@ function runAiSummaryStep(array $context): array
 
     $diagnosticId = (int) $context['diagnostic']['id'];
     $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    assertDiagnosticRunning($diagnosticId, $diagnostic !== null && ($diagnostic['status'] ?? null) === 'running');
     $summary = is_string($diagnostic['summary_json'] ?? null) ? json_decode($diagnostic['summary_json'], true) : null;
 
     $analysis = runSummaryAnalysis(
@@ -676,10 +742,10 @@ function runAiSummaryStep(array $context): array
         resolveModelSetting(getSetting(AI_SUMMARY_MODEL_SETTING)),
         $key,
         loadSummaryPrompt(),
-        makeAiSender($key),
+        withHeartbeat(makeAiSender($key), $diagnosticId),
         static fn (array $record): int => insertAiResult($diagnosticId, $record)
     );
-    touchDiagnosticHeartbeat($diagnosticId);
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
 
     return [
         'status'  => STEP_STATUS_DONE,
@@ -705,6 +771,7 @@ function runAiClientStep(array $context): array
 
     $diagnosticId = (int) $context['diagnostic']['id'];
     $diagnostic = getDiagnosticWithSteps($diagnosticId);
+    assertDiagnosticRunning($diagnosticId, $diagnostic !== null && ($diagnostic['status'] ?? null) === 'running');
     $aiResults = getAiResultsByDiagnostic($diagnosticId);
     $summaryStep = findClientDiagnosticStep($diagnostic['steps'] ?? [], 'ai_summary');
     $summaryResult = findCurrentClientAiResult(
@@ -726,11 +793,11 @@ function runAiClientStep(array $context): array
         resolveModelSetting(getSetting(AI_CLIENT_MODEL_SETTING)),
         $key,
         loadClientPrompt(),
-        makeAiSender($key),
+        withHeartbeat(makeAiSender($key), $diagnosticId),
         static fn (array $record): int => insertAiResult($diagnosticId, $record)
     );
+    assertDiagnosticRunning($diagnosticId, touchDiagnosticHeartbeat($diagnosticId));
     replaceFindingClientTexts($diagnosticId, $analysis['texts']);
-    touchDiagnosticHeartbeat($diagnosticId);
 
     return [
         'status'  => STEP_STATUS_DONE,
@@ -831,7 +898,8 @@ function addPageErrorFindings(array $result, array $context): array
         count($result['facts']['resources']),
         $broken,
         count($phpErrors),
-        count($mixedContent)
+        count($mixedContent),
+        (int) ($result['facts']['skipped_by_limit'] ?? 0)
     );
 
     return $result;
@@ -922,6 +990,140 @@ function truncateStepMessage(string $message): string
 }
 
 /**
+ * Прерывает выполнение воркера, если диагностика больше не в статусе `running`.
+ */
+function assertDiagnosticRunning(int $diagnosticId, bool $stillRunning): void
+{
+    if (!$stillRunning) {
+        throw new DiagnosticNoLongerRunningException($diagnosticId);
+    }
+}
+
+/**
+ * Оборачивает сетевой вызов обновлением heartbeat по времени (не чаще раза в `$intervalSeconds`).
+ * Проверяет статус до и после вызова: если `touch` вернул `false`, бросает `DiagnosticNoLongerRunningException`
+ * и при повторных обращениях сразу останавливается без лишних запросов к БД и сети.
+ *
+ * @param callable(int $diagnosticId): bool|null $touch
+ * @param callable(): int|null                   $clock
+ */
+function withHeartbeat(
+    callable $request,
+    int $diagnosticId,
+    ?callable $touch = null,
+    ?callable $clock = null,
+    int $intervalSeconds = HEARTBEAT_MIN_INTERVAL_SECONDS
+): callable {
+    $touch ??= static fn (int $id): bool => touchDiagnosticHeartbeat($id);
+    $clock ??= static fn (): int => time();
+    $last = null;
+    $aborted = false;
+
+    $ping = static function () use ($diagnosticId, $touch, $clock, $intervalSeconds, &$last, &$aborted): void {
+        if ($aborted) {
+            throw new DiagnosticNoLongerRunningException($diagnosticId);
+        }
+
+        $now = (int) $clock();
+        if ($last !== null && ($now - $last) < $intervalSeconds) {
+            return;
+        }
+
+        if (!$touch($diagnosticId)) {
+            $aborted = true;
+            throw new DiagnosticNoLongerRunningException($diagnosticId);
+        }
+
+        $last = $now;
+    };
+
+    return static function (mixed ...$args) use ($request, $ping): mixed {
+        $ping();
+        $result = $request(...$args);
+        $ping();
+
+        return $result;
+    };
+}
+
+/**
+ * @param array<string, mixed>|null $error результат `error_get_last()`
+ */
+function isFatalWorkerError(?array $error): bool
+{
+    return $error !== null && in_array($error['type'] ?? null, WORKER_FATAL_ERROR_TYPES, true);
+}
+
+/**
+ * @param array<string, mixed> $error результат `error_get_last()`
+ * @return array{diagnostic: string, step: string}
+ */
+function buildWorkerFatalMessages(array $error): array
+{
+    $isOom = stripos((string) ($error['message'] ?? ''), WORKER_FATAL_MEMORY_MARKER) !== false;
+
+    return $isOom
+        ? ['diagnostic' => WORKER_FATAL_OOM_DIAGNOSTIC_MESSAGE, 'step' => WORKER_FATAL_OOM_STEP_MESSAGE]
+        : ['diagnostic' => WORKER_FATAL_DIAGNOSTIC_MESSAGE, 'step' => WORKER_FATAL_STEP_MESSAGE];
+}
+
+/**
+ * Обработчик фатального завершения воркера: логирует ошибку и переводит активную диагностику и её
+ * текущий шаг в `failed`. Не выбрасывает исключений (безопасен для `register_shutdown_function`).
+ *
+ * @param array<string, mixed>                                                        $error
+ * @param callable(int $diagnosticId, string $diagnosticMsg, string $stepMsg): bool|null $failDiagnostic
+ * @param callable(string $message, array<string, mixed> $context): void|null         $log
+ */
+function handleWorkerFatalError(
+    int $diagnosticId,
+    array $error,
+    ?callable $failDiagnostic = null,
+    ?callable $log = null,
+    ?PDO $pdo = null
+): bool {
+    $log ??= static function (string $message, array $context): void {
+        logError($message, $context);
+    };
+
+    try {
+        $log('Фатальная ошибка воркера', [
+            'diagnostic_id' => $diagnosticId,
+            'type'          => $error['type'] ?? null,
+            'message'       => (string) ($error['message'] ?? ''),
+            'file'          => (string) ($error['file'] ?? ''),
+            'line'          => $error['line'] ?? null,
+        ]);
+    } catch (Throwable) {
+    }
+
+    $messages = buildWorkerFatalMessages($error);
+
+    try {
+        if ($failDiagnostic !== null) {
+            return (bool) $failDiagnostic($diagnosticId, $messages['diagnostic'], $messages['step']);
+        }
+
+        $db = $pdo ?? getPdo();
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+
+        return failRunningDiagnostic($diagnosticId, $messages['diagnostic'], $messages['step'], $db);
+    } catch (Throwable $e) {
+        try {
+            $log('Не удалось отметить фатальное завершение воркера в БД', [
+                'diagnostic_id' => $diagnosticId,
+                'error'         => $e->getMessage(),
+            ]);
+        } catch (Throwable) {
+        }
+
+        return false;
+    }
+}
+
+/**
  * Приводит ответ обработчика к одному виду.
  *
  * @return array{status: string, message: ?string, facts: array, findings: list<array>, stop: bool}
@@ -944,6 +1146,7 @@ function normalizeStepResult(mixed $result): array
 /**
  * Выполняет шаги по порядку, без БД: о каждом шаге сообщает через колбэки.
  * Исключение в шаге → `failed` с сообщением, его факты и находки не принимаются, следующие шаги выполняются.
+ * `DiagnosticNoLongerRunningException` пробрасывается сразу наружу и останавливает цикл.
  * `stop` → оставшиеся шаги `skipped` с причиной (`onStepStart` для них не вызывается).
  *
  * @param list<array{code: string, title: string, handler: callable}> $steps
@@ -980,6 +1183,8 @@ function executeSteps(array $steps, array $context, callable $onStepStart, calla
             if ($result['stop']) {
                 $stoppedBy = $step;
             }
+        } catch (DiagnosticNoLongerRunningException $e) {
+            throw $e;
         } catch (Throwable $e) {
             $error   = $e;
             $status  = STEP_STATUS_FAILED;
@@ -996,24 +1201,28 @@ function executeSteps(array $steps, array $context, callable $onStepStart, calla
 /**
  * Полный прогон диагностики воркером. Ничего не делает, если диагностика не в `queued`.
  *
+ * @param callable(): void|null $onClaimed вызывается сразу после перевода `queued → running`
  * @return bool true — диагностика выполнена этим вызовом
  */
-function runDiagnostic(int $id): bool
+function runDiagnostic(int $id, ?callable $onClaimed = null): bool
 {
     if (!claimDiagnostic($id)) {
         return false;
     }
+    if ($onClaimed !== null) {
+        $onClaimed();
+    }
 
     $diagnostic = getDiagnosticWithSteps($id);
     if ($diagnostic === null) {
-        throw new RuntimeException("Диагностика {$id} пропала после запуска.");
+        throw new DiagnosticNoLongerRunningException($id);
     }
 
     $steps = getDiagnosticSteps();
     createDiagnosticSteps($id, $steps);
 
     executeStepsWithDb($id, $steps, $diagnostic);
-    finishDiagnostic($id, 'done', null);
+    assertDiagnosticRunning($id, finishDiagnostic($id, 'done', null));
 
     return true;
 }
@@ -1022,26 +1231,77 @@ function runDiagnostic(int $id): bool
  * Перезапуск ИИ-анализа воркером: только ИИ-шаги по фактам из БД, без запросов к проверяемому сайту.
  * Ничего не делает, если диагностика не в `queued` (её ставит в очередь `queueAiRerun()`).
  *
+ * @param callable(): void|null $onClaimed вызывается сразу после перевода `queued → running`
  * @return bool true — перезапуск выполнен этим вызовом
  */
-function runAiRerun(int $id): bool
+function runAiRerun(int $id, ?callable $onClaimed = null): bool
 {
     if (!claimAiRerun($id)) {
         return false;
     }
+    if ($onClaimed !== null) {
+        $onClaimed();
+    }
 
     $steps = getAiSteps();
-    resetAiSteps($id, $steps);
+    assertDiagnosticRunning($id, resetAiSteps($id, $steps));
 
     $diagnostic = getDiagnosticWithSteps($id);
     if ($diagnostic === null) {
-        throw new RuntimeException("Диагностика {$id} пропала после запуска.");
+        throw new DiagnosticNoLongerRunningException($id);
     }
 
     executeStepsWithDb($id, $steps, $diagnostic);
-    finishDiagnostic($id, 'done', null);
+    assertDiagnosticRunning($id, finishDiagnostic($id, 'done', null));
 
     return true;
+}
+
+/**
+ * Сохраняет находки шага и гарантированно фиксирует его статус и прогресс.
+ * Сбой при записи находки логируется и переводит шаг в `failed`, не прерывая сохранение остальных находок
+ * и вызов `$finishStep` / `$updateProgress` (шаг не остаётся в `running`, цикл шагов продолжается).
+ * `DiagnosticNoLongerRunningException` пробрасывается наружу без обновления шага и прогресса.
+ *
+ * @param array{code: string, title: string}                                 $step
+ * @param list<array<string, mixed>>                                         $findings
+ * @param callable(array $finding): mixed                                    $saveFinding
+ * @param callable(string $stepCode, string $status, ?string $message): void $finishStep
+ * @param callable(int $progress): void                                      $updateProgress
+ * @param callable(Throwable $e, array $context): void                       $logError
+ */
+function finalizeStepPersistence(
+    int $diagnosticId,
+    array $step,
+    string $status,
+    ?string $message,
+    int $progress,
+    ?Throwable $error,
+    array $findings,
+    callable $saveFinding,
+    callable $finishStep,
+    callable $updateProgress,
+    callable $logError
+): void {
+    if ($error !== null) {
+        $logError($error, ['diagnostic_id' => $diagnosticId, 'step_code' => $step['code']]);
+    }
+
+    foreach ($findings as $finding) {
+        try {
+            $saveFinding($finding);
+        } catch (DiagnosticNoLongerRunningException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $logError($e, ['diagnostic_id' => $diagnosticId, 'step_code' => $step['code']]);
+            $status = STEP_STATUS_FAILED;
+            $detail = $e->getMessage() !== '' ? $e->getMessage() : get_class($e);
+            $message = truncateStepMessage(STEP_SAVE_FINDINGS_ERROR_PREFIX . $detail);
+        }
+    }
+
+    $finishStep($step['code'], $status, $message);
+    $updateProgress($progress);
 }
 
 /**
@@ -1056,8 +1316,8 @@ function executeStepsWithDb(int $id, array $steps, array $diagnostic): void
         $steps,
         buildStepContext($diagnostic),
         static function (array $step) use ($id): void {
-            markStepRunning($id, $step['code']);
-            touchDiagnosticHeartbeat($id);
+            assertDiagnosticRunning($id, markStepRunning($id, $step['code']));
+            assertDiagnosticRunning($id, touchDiagnosticHeartbeat($id));
         },
         static function (
             array $step,
@@ -1067,14 +1327,26 @@ function executeStepsWithDb(int $id, array $steps, array $diagnostic): void
             ?Throwable $error,
             array $findings
         ) use ($id): void {
-            if ($error !== null) {
-                logException($error, ['diagnostic_id' => $id, 'step_code' => $step['code']]);
-            }
-            foreach ($findings as $finding) {
-                insertFinding($id, $finding);
-            }
-            finishStep($id, $step['code'], $status, $message);
-            updateDiagnosticProgress($id, $progress);
+            assertDiagnosticRunning($id, touchDiagnosticHeartbeat($id));
+            finalizeStepPersistence(
+                $id,
+                $step,
+                $status,
+                $message,
+                $progress,
+                $error,
+                $findings,
+                static fn (array $finding): int => insertFinding($id, $finding),
+                static function (string $stepCode, string $stepStatus, ?string $stepMessage) use ($id): void {
+                    assertDiagnosticRunning($id, finishStep($id, $stepCode, $stepStatus, $stepMessage));
+                },
+                static function (int $stepProgress) use ($id): void {
+                    assertDiagnosticRunning($id, updateDiagnosticProgress($id, $stepProgress));
+                },
+                static function (Throwable $e, array $context): void {
+                    logException($e, $context);
+                }
+            );
         }
     );
 }

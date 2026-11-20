@@ -177,7 +177,7 @@ function resolveChromePath(?string $saved): string
 /**
  * Маска секрета для показа: «sk-…a1b2». Пустой → null («не задан»).
  */
-function maskSecret(string $secret): ?string
+function maskSecret(#[\SensitiveParameter] string $secret): ?string
 {
     if ($secret === '') {
         return null;

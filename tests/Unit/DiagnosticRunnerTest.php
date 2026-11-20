@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use DiagnosticNoLongerRunningException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -369,5 +370,307 @@ final class DiagnosticRunnerTest extends TestCase
         $this->assertSame(['https://shop.test/', 'https://shop.test/c/'], $merged[0]['evidence']['pages']);
         $this->assertSame('script', $merged[0]['evidence']['type']);
         $this->assertSame(1, $merged[0]['page_id']);
+    }
+
+    public function testFindingSaveFailureMarksStepFailedAndContinuesLoop(): void
+    {
+        $savedFindings = [];
+        $persistedSteps = [];
+        $progressUpdates = [];
+        $logged = [];
+
+        $badFinding = makeFinding('vulnerability', 'Плохая находка', null, 'bad');
+        $okFinding1 = makeFinding('vulnerability', 'Вторая находка', null, 'ok1');
+        $okFinding2 = makeFinding('seo', 'SEO находка', null, 'ok2');
+
+        $saveFinding = static function (array $finding) use (&$savedFindings): void {
+            if ($finding['title'] === 'Плохая находка') {
+                throw new RuntimeException('SQLSTATE[22001]: Data too long');
+            }
+            $savedFindings[] = $finding['title'];
+        };
+
+        $steps = [
+            $this->step('vulnerabilities', static fn (array $context): array => [
+                'status'   => STEP_STATUS_DONE,
+                'message'  => 'Найдено 2',
+                'findings' => [$badFinding, $okFinding1],
+            ]),
+            $this->step('seo', static fn (array $context): array => [
+                'status'   => STEP_STATUS_DONE,
+                'message'  => 'Готово',
+                'findings' => [$okFinding2],
+            ]),
+        ];
+
+        executeSteps(
+            $steps,
+            $this->context(),
+            static function (array $step): void {},
+            static function (
+                array $step,
+                string $status,
+                ?string $message,
+                int $progress,
+                ?\Throwable $error,
+                array $findings
+            ) use ($saveFinding, &$persistedSteps, &$progressUpdates, &$logged): void {
+                finalizeStepPersistence(
+                    7,
+                    $step,
+                    $status,
+                    $message,
+                    $progress,
+                    $error,
+                    $findings,
+                    $saveFinding,
+                    static function (string $stepCode, string $stepStatus, ?string $stepMessage) use (&$persistedSteps): void {
+                        $persistedSteps[] = [
+                            'code'    => $stepCode,
+                            'status'  => $stepStatus,
+                            'message' => $stepMessage,
+                        ];
+                    },
+                    static function (int $stepProgress) use (&$progressUpdates): void {
+                        $progressUpdates[] = $stepProgress;
+                    },
+                    static function (\Throwable $e, array $context) use (&$logged): void {
+                        $logged[] = ['message' => $e->getMessage(), 'context' => $context];
+                    }
+                );
+            }
+        );
+
+        $this->assertCount(1, $logged);
+        $this->assertSame('SQLSTATE[22001]: Data too long', $logged[0]['message']);
+        $this->assertSame(['diagnostic_id' => 7, 'step_code' => 'vulnerabilities'], $logged[0]['context']);
+
+        $this->assertSame(['Вторая находка', 'SEO находка'], $savedFindings);
+        $this->assertSame([
+            [
+                'code'    => 'vulnerabilities',
+                'status'  => STEP_STATUS_FAILED,
+                'message' => 'Не удалось сохранить находки: SQLSTATE[22001]: Data too long',
+            ],
+            [
+                'code'    => 'seo',
+                'status'  => STEP_STATUS_DONE,
+                'message' => 'Готово',
+            ],
+        ], $persistedSteps);
+        $this->assertSame([50, 100], $progressUpdates);
+    }
+
+    public function testWithHeartbeatThrottlesByClockAndPingsAfterSlowRequest(): void
+    {
+        $now = 0;
+        $touches = [];
+        $requests = [];
+
+        $wrapped = withHeartbeat(
+            static function (string $url, int $duration) use (&$now, &$requests): string {
+                $requests[] = $url;
+                $now += $duration;
+
+                return 'ok:' . $url;
+            },
+            7,
+            static function (int $id) use (&$touches, &$now): bool {
+                $touches[] = [$id, $now];
+
+                return true;
+            },
+            static function () use (&$now): int {
+                return $now;
+            },
+            30
+        );
+
+        // t=0: первый пинг до запроса, запрос быстрый (0с), после него < 30с — второй пинг не идёт
+        $this->assertSame('ok:u1', $wrapped('u1', 0));
+        // t=10 (<30): пинг пропущен до и после
+        $now = 10;
+        $this->assertSame('ok:u2', $wrapped('u2', 19)); // t=29 (<30)
+        // t=30 (>=30): пинг до запроса; запрос быстрый (5с -> t=35 <60)
+        $now = 30;
+        $this->assertSame('ok:u3', $wrapped('u3', 5));
+        // t=40 (<60): до запроса пинг пропущен, но запрос шёл 35с -> t=75 (>=60), пинг срабатывает после запроса
+        $now = 40;
+        $this->assertSame('ok:u4', $wrapped('u4', 35));
+
+        $this->assertSame(['u1', 'u2', 'u3', 'u4'], $requests);
+        $this->assertSame([[7, 0], [7, 30], [7, 75]], $touches);
+    }
+
+    public function testWithHeartbeatAbortsWhenDiagnosticStopsRunning(): void
+    {
+        $touchCalls = 0;
+        $requestCalls = 0;
+
+        $wrapped = withHeartbeat(
+            static function () use (&$requestCalls): string {
+                $requestCalls++;
+
+                return 'ok';
+            },
+            15,
+            static function () use (&$touchCalls): bool {
+                $touchCalls++;
+
+                return false;
+            },
+            static fn (): int => 100
+        );
+
+        $caught = false;
+        try {
+            $wrapped();
+        } catch (DiagnosticNoLongerRunningException $e) {
+            $caught = true;
+            $this->assertSame(15, $e->diagnosticId);
+        }
+        $this->assertTrue($caught);
+        $this->assertSame(1, $touchCalls);
+        $this->assertSame(0, $requestCalls);
+
+        // Повторный вызов уже помеченной обёртки сразу бросает исключение без лишних запросов к БД/сети
+        try {
+            $wrapped();
+            $this->fail('Ожидалось DiagnosticNoLongerRunningException');
+        } catch (DiagnosticNoLongerRunningException $e) {
+            $this->assertSame(15, $e->diagnosticId);
+        }
+        $this->assertSame(1, $touchCalls);
+        $this->assertSame(0, $requestCalls);
+    }
+
+    public function testExecuteStepsPropagatesNoLongerRunningWithoutRunningSubsequentSteps(): void
+    {
+        $events = [];
+        $nextCalled = false;
+
+        $steps = [
+            $this->step('first', static function () use (&$events): array {
+                $events[] = 'handler:first';
+                throw new DiagnosticNoLongerRunningException(7);
+            }),
+            $this->step('second', static function () use (&$nextCalled): array {
+                $nextCalled = true;
+
+                return ['status' => STEP_STATUS_DONE];
+            }),
+        ];
+
+        $this->expectException(DiagnosticNoLongerRunningException::class);
+        try {
+            executeSteps(
+                $steps,
+                $this->context(),
+                static function (array $step) use (&$events): void {
+                    $events[] = 'start:' . $step['code'];
+                },
+                static function (array $step) use (&$events): void {
+                    $events[] = 'finish:' . $step['code'];
+                }
+            );
+        } finally {
+            $this->assertSame(['start:first', 'handler:first'], $events);
+            $this->assertFalse($nextCalled);
+        }
+    }
+
+    public function testFinalizeStepPersistencePropagatesNoLongerRunningWithoutUpdatingStep(): void
+    {
+        $finishCalled = false;
+        $progressCalled = false;
+
+        $this->expectException(DiagnosticNoLongerRunningException::class);
+        try {
+            finalizeStepPersistence(
+                7,
+                ['code' => 'seo', 'title' => 'SEO'],
+                STEP_STATUS_DONE,
+                'OK',
+                50,
+                null,
+                [makeFinding('seo', 'Нет title', null, 'title_missing')],
+                static function (): void {
+                    throw new DiagnosticNoLongerRunningException(7);
+                },
+                static function () use (&$finishCalled): void {
+                    $finishCalled = true;
+                },
+                static function () use (&$progressCalled): void {
+                    $progressCalled = true;
+                },
+                static function (): void {}
+            );
+        } finally {
+            $this->assertFalse($finishCalled);
+            $this->assertFalse($progressCalled);
+        }
+    }
+
+    public function testWorkerFatalErrorDetectionAndMessages(): void
+    {
+        $this->assertFalse(isFatalWorkerError(null));
+        $this->assertFalse(isFatalWorkerError(['type' => E_WARNING, 'message' => 'warn']));
+        $this->assertTrue(isFatalWorkerError(['type' => E_ERROR, 'message' => 'Allowed memory size of 134217728 bytes exhausted']));
+        $this->assertTrue(isFatalWorkerError(['type' => E_CORE_ERROR, 'message' => 'Core error']));
+        $this->assertTrue(isFatalWorkerError(['type' => E_COMPILE_ERROR, 'message' => 'Compile error']));
+        $this->assertTrue(isFatalWorkerError(['type' => E_PARSE, 'message' => 'Parse error']));
+
+        $oom = buildWorkerFatalMessages(['type' => E_ERROR, 'message' => 'Allowed memory size of 134217728 bytes exhausted']);
+        $this->assertSame(WORKER_FATAL_OOM_DIAGNOSTIC_MESSAGE, $oom['diagnostic']);
+        $this->assertSame(WORKER_FATAL_OOM_STEP_MESSAGE, $oom['step']);
+
+        $other = buildWorkerFatalMessages(['type' => E_ERROR, 'message' => 'Call to undefined function foo()']);
+        $this->assertSame(WORKER_FATAL_DIAGNOSTIC_MESSAGE, $other['diagnostic']);
+        $this->assertSame(WORKER_FATAL_STEP_MESSAGE, $other['step']);
+    }
+
+    public function testHandleWorkerFatalErrorUpdatesDiagnosticAndSurvivesDbFailures(): void
+    {
+        $logged = [];
+        $captured = null;
+
+        $ok = handleWorkerFatalError(
+            42,
+            ['type' => E_ERROR, 'message' => 'Allowed memory size of 100 bytes exhausted', 'file' => 'worker.php', 'line' => 10],
+            static function (int $id, string $diagMsg, string $stepMsg) use (&$captured): bool {
+                $captured = ['id' => $id, 'diag' => $diagMsg, 'step' => $stepMsg];
+
+                return true;
+            },
+            static function (string $msg, array $ctx) use (&$logged): void {
+                $logged[] = ['msg' => $msg, 'ctx' => $ctx];
+            }
+        );
+
+        $this->assertTrue($ok);
+        $this->assertSame([
+            'id'   => 42,
+            'diag' => WORKER_FATAL_OOM_DIAGNOSTIC_MESSAGE,
+            'step' => WORKER_FATAL_OOM_STEP_MESSAGE,
+        ], $captured);
+        $this->assertCount(1, $logged);
+        $this->assertSame('Фатальная ошибка воркера', $logged[0]['msg']);
+
+        // При исключении при обновлении БД shutdown-обработчик не бросает исключений наружу
+        $logged = [];
+        $failed = handleWorkerFatalError(
+            42,
+            ['type' => E_ERROR, 'message' => 'Fatal error', 'file' => 'x.php', 'line' => 1],
+            static function (): bool {
+                throw new RuntimeException('MySQL server has gone away');
+            },
+            static function (string $msg, array $ctx) use (&$logged): void {
+                $logged[] = ['msg' => $msg, 'ctx' => $ctx];
+            }
+        );
+
+        $this->assertFalse($failed);
+        $this->assertCount(2, $logged);
+        $this->assertStringContainsString('MySQL server has gone away', $logged[1]['ctx']['error']);
     }
 }

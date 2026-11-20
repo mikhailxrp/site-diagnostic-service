@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use ErrorException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -356,5 +357,87 @@ final class StackDetectorTest extends TestCase
         ));
         $this->assertSame('2.4', extractVersionFromProbe('Magento/2.4 (Community)', $signatures['magento']['probes'][0]['version']));
         $this->assertNull(extractVersionFromProbe('<html>404</html>', $signatures['magento']['probes'][0]['version']));
+    }
+
+    public function testInvalidUtf8InThemePathAndHeaderIsScrubbed(): void
+    {
+        $html = '<html><head><meta name="generator" content="WordPress 6.4.2">'
+            . '<link rel="stylesheet" href="https://shop.test/wp-content/themes/%D2%E5%EC%E0/style.css">'
+            . '</head><body></body></html>';
+
+        $items = detectStack(
+            ['headers' => ['x-powered-by' => ["PHP/8.1\xC0"]], 'body' => $html],
+            parseHtml($html, 'https://shop.test/'),
+            loadStackSignatures()
+        );
+
+        $this->assertNotEmpty($items);
+        foreach ($items as $item) {
+            $this->assertTrue(mb_check_encoding($item['name'], 'UTF-8'));
+            if ($item['version'] !== null) {
+                $this->assertTrue(mb_check_encoding($item['version'], 'UTF-8'));
+            }
+            foreach ($item['evidence'] as $evidence) {
+                $this->assertTrue(mb_check_encoding($evidence['detail'], 'UTF-8'));
+            }
+        }
+        $this->assertIsString(json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+    }
+
+    public function testExtractQueryVersionHandlesTwentyThousandParamsWithoutWarning(): void
+    {
+        $manyParams = 'https://a.test/x.js?' . str_repeat('a=&', 20000);
+
+        set_error_handler(static function (int $errno, string $errstr, string $errfile, int $errline): bool {
+            throw new ErrorException($errstr, 0, $errno, $errfile, $errline);
+        });
+        try {
+            $this->assertNull(extractQueryVersion($manyParams));
+            $this->assertSame('6.4.2', extractQueryVersion($manyParams . 'ver=6.4.2'));
+            $this->assertSame('1.2.3', extractQueryVersion('https://a.test/x.js?v=abc&ver=1.2.3'));
+            $this->assertSame('2.0.1', extractQueryVersion('https://a.test/x.js?Ver=2.0.1'));
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    public function testDetectThemesAndPluginsCapsFakeItemsWhileKeepingPlatformPluginsAndExistingVersions(): void
+    {
+        $links = [];
+        $scripts = [];
+        for ($i = 1; $i <= 250; $i++) {
+            $links[] = '<link rel="stylesheet" href="https://shop.test/wp-content/plugins/fake-plugin-' . $i . '/style.css">';
+        }
+        for ($i = 1; $i <= 40; $i++) {
+            $links[] = '<link rel="stylesheet" href="https://shop.test/wp-content/themes/fake-theme-' . $i . '/style.css">';
+        }
+        // Поздний скрипт первого плагина с версией и плагин-платформа WooCommerce после лимита
+        $scripts[] = '<script src="https://shop.test/wp-content/plugins/fake-plugin-1/fake-plugin-1.js?ver=1.4.0"></script>';
+        $scripts[] = '<script src="https://shop.test/wp-content/plugins/woocommerce/woocommerce.min.js?ver=9.1.0"></script>';
+
+        $html = '<html><head><meta name="generator" content="WordPress 6.4.2">'
+            . implode('', $links)
+            . implode('', $scripts)
+            . '</head><body></body></html>';
+
+        $items = detectStack(['headers' => [], 'body' => $html], parseHtml($html, 'https://shop.test/'), loadStackSignatures());
+
+        $plugins = array_values(array_filter($items, static fn (array $item): bool => $item['category'] === 'plugin'));
+        $themes = array_values(array_filter($items, static fn (array $item): bool => $item['category'] === 'theme'));
+
+        // 100 обычных плагинов + плагин-платформа WooCommerce
+        $this->assertCount(STACK_MAX_PLUGINS_PER_CMS + 1, $plugins);
+        $this->assertCount(STACK_MAX_THEMES_PER_CMS, $themes);
+
+        $firstPlugin = $this->find($items, 'plugin', 'fake-plugin-1');
+        $this->assertNotNull($firstPlugin);
+        $this->assertSame('1.4.0', $firstPlugin['version']);
+
+        $woocommerce = $this->find($items, 'plugin', 'WooCommerce');
+        $this->assertNotNull($woocommerce);
+        $this->assertSame('9.1.0', $woocommerce['version']);
+
+        $this->assertNull($this->find($items, 'plugin', 'fake-plugin-101'));
+        $this->assertNull($this->find($items, 'theme', 'fake-theme-21'));
     }
 }

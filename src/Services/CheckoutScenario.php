@@ -9,10 +9,13 @@ declare(strict_types=1);
  * Заказ не отправляется:
  * - кнопки оформления, оплаты и «купить в 1 клик» не нажимаются никогда (стоп-лист в data/checkout-selectors.php);
  *   оформление открывается переходом по адресу, поля формы не заполняются;
- * - весь сценарий идёт под перехватом сети (`Fetch`): изменяющие запросы на адреса «заказа» блокируются всегда,
- *   а с начала шага оформления (или как только открылся документ оформления) — все изменяющие запросы;
- * - если перехват не включился — сценарий не начинается; ошибка в обработчике перехвата — запрос блокируется.
- * Запросы из сторонних фреймов (оплата) перехват вкладки не видит — их защищает то, что ничего не нажимается.
+ * - весь сценарий идёт под перехватом сети (`Fetch` на вкладке и дочерних целях через `Target.setAutoAttach`,
+ *   обход Service Worker и запрет новых окон `--block-new-web-contents`): «заказные» адреса и GET-запросы к ним
+ *   блокируются всегда, на стадии добавления действует default-DENY (пропускаются только запросы добавления в корзину
+ *   по URL/телу POST без признаков заказа), а с шага оформления — все изменяющие запросы;
+ * - все адреса проверяются через `isBrowserRequestAllowed()` (защита от SSRF);
+ * - если перехват не включился — сценарий не начинается; ошибка в обработчике перехвата — запрос блокируется;
+ * - перехват не отключается до закрытия вкладки, чтобы `sendBeacon` / `keepalive` на `pagehide` тоже блокировались.
  *
  * Решения (какую кнопку нажать, был ли сигнал добавления, корзина пуста или нет, есть ли форма, блокировать ли
  * запрос) — чистые функции без браузера: их покрывают тесты. Страница читается одним скриптом
@@ -50,13 +53,20 @@ const CHECKOUT_REQUEST_LOG_MAX      = 50;    // записей лога пере
 const CHECKOUT_RESPONSES_MAX        = 200;   // ответов, записанных после нажатия «В корзину»
 const CHECKOUT_PUMP_INTERVAL_US     = 50000;
 
-const CHECKOUT_MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
-const CHECKOUT_BLOCK_REASON     = 'BlockedByClient';
-const CHECKOUT_DOCUMENT_TYPE    = 'Document';
-const CHECKOUT_API_TYPES        = ['XHR', 'Fetch'];
-const CHECKOUT_HTTP_OK_MIN      = 200;
-const CHECKOUT_HTTP_OK_MAX      = 299;
-const CHECKOUT_CART_REQUEST_PATTERN = '~cart|basket|korzin~i';
+const CHECKOUT_MUTATING_METHODS          = ['POST', 'PUT', 'PATCH', 'DELETE'];
+const CHECKOUT_BLOCK_REASON              = 'BlockedByClient';
+const CHECKOUT_DOCUMENT_TYPE             = 'Document';
+const CHECKOUT_SCRIPT_TYPE               = 'Script';
+const CHECKOUT_STATIC_GET_TYPES          = ['Stylesheet', 'Font', 'Image', 'Media'];
+const CHECKOUT_API_TYPES                 = ['XHR', 'Fetch'];
+const CHECKOUT_HTTP_OK_MIN               = 200;
+const CHECKOUT_HTTP_OK_MAX               = 299;
+const CHECKOUT_CART_REQUEST_PATTERN      = '~cart|basket|korzin~i';
+const CHECKOUT_POST_DATA_MAX_BYTES       = 16384;
+const CHECKOUT_STATIC_SCRIPT_EXT_PATTERN = '~\.m?js$~i';
+const CHECKOUT_INSTANT_ORDER_PATTERN     = '~one[-_]?click|1[-_]?click|buy1click|(?:quick|fast)[-_]?(?:order|buy)~i';
+const CHECKOUT_URL_ORDER_ATTR_PATTERN    = '~(?:/|\?|[=&])(?:order|zakaz|oformlen|payment|pay)(?:[/_.?&=#-]|$)~i';
+const CHECKOUT_DIRECT_CHECKOUT_ADD_PATTERN = '~/checkout/\?~i';
 
 const CHECKOUT_ACTION_BLOCKED = 'blocked';
 const CHECKOUT_ACTION_PASSED  = 'passed';
@@ -110,17 +120,20 @@ const CHECKOUT_PROBE_SCRIPT = <<<'JS'
   all('[data-sd-candidate]').forEach((el) => el.removeAttribute('data-sd-candidate'));
   const seen = new Set();
   const candidates = [];
-  const attrNames = ['class', 'id', 'name', 'onclick', 'href', 'title', 'aria-label', 'data-action', 'formaction', 'value'];
+  const attrNames = ['class', 'id', 'name', 'onclick', 'href', 'title', 'aria-label', 'data-action', 'formaction', 'value', 'data-url', 'data-href', 'data-target'];
   const push = (el, bySelector) => {
     if (seen.has(el) || candidates.length >= cfg.maxCandidates) return;
     seen.add(el);
     const index = candidates.length;
     el.setAttribute('data-sd-candidate', String(index));
     const className = typeof el.className === 'string' ? el.className : '';
+    const formEl = el.closest('form');
+    const formAction = el.getAttribute('formaction') || (formEl ? (formEl.getAttribute('action') || '') : '');
     candidates.push({
       index,
       text: norm(el.innerText || el.value || el.getAttribute('aria-label') || el.title).slice(0, 100),
       attrs: norm(attrNames.map((a) => el.getAttribute(a) || '').join(' ')).slice(0, 500),
+      form_action: norm(formAction).slice(0, 200),
       by_selector: bySelector,
       visible: visible(el),
       disabled: !!(el.disabled || el.getAttribute('aria-disabled') === 'true' || /(^|\s)disabled(\s|$)/.test(className)),
@@ -229,6 +242,8 @@ function buildCheckoutRules(array $selectors, array $shopPatterns, array $platfo
             'order'             => $selectors['requests']['order'] ?? [],
             'add_to_cart'       => $selectors['requests']['add_to_cart'] ?? [],
             'checkout_document' => $selectors['requests']['checkout_document'] ?? [],
+            'add_to_cart_body'  => $selectors['requests']['add_to_cart_body'] ?? [],
+            'order_body'        => $selectors['requests']['order_body'] ?? [],
         ],
         'contact_field_pattern' => (string) ($selectors['contact_field_pattern'] ?? ''),
         'inline_cart' => $inline,
@@ -374,29 +389,106 @@ function raiseCheckoutStage(string $current, string $next): string
 }
 
 /**
- * Решение по перехваченному запросу. Документ оформления → стадия «оформление». Изменяющий запрос блокируется на
- * стадии оформления и на любой стадии, если адрес похож на заказ (кроме добавления в корзину до оформления).
+ * Извлекает тело POST/PUT/PATCH-запроса из параметров CDP `Fetch.requestPaused`, ограничивая размер.
  *
- * @param array{order: list<string>, add_to_cart: list<string>, checkout_document: list<string>} $patterns
+ * @param array<string, mixed> $request
+ */
+function extractCheckoutRequestPostData(array $request): ?string
+{
+    $postData = $request['postData'] ?? null;
+    if (is_string($postData) && $postData !== '') {
+        return substr($postData, 0, CHECKOUT_POST_DATA_MAX_BYTES);
+    }
+
+    $entries = $request['postDataEntries'] ?? null;
+    if (!is_array($entries)) {
+        return null;
+    }
+
+    $combined = '';
+    foreach ($entries as $entry) {
+        if (!is_array($entry) || !is_string($entry['bytes'] ?? null)) {
+            continue;
+        }
+        $decoded = base64_decode($entry['bytes'], true);
+        if ($decoded === false || $decoded === '') {
+            continue;
+        }
+        $remaining = CHECKOUT_POST_DATA_MAX_BYTES - strlen($combined);
+        if ($remaining <= 0) {
+            break;
+        }
+        $combined .= substr($decoded, 0, $remaining);
+    }
+
+    return $combined !== '' ? $combined : null;
+}
+
+/**
+ * Безопасные для GET статические ресурсы и документы оформления (но не быстрый заказ / 1 клик и не PHP/RPC-обработчики).
+ */
+function isStaticCheckoutAssetGet(string $url, string $resourceType): bool
+{
+    if ($resourceType === CHECKOUT_DOCUMENT_TYPE) {
+        return preg_match(CHECKOUT_INSTANT_ORDER_PATTERN, crawlUrlSubject($url)) !== 1;
+    }
+    if (in_array($resourceType, CHECKOUT_STATIC_GET_TYPES, true)) {
+        return true;
+    }
+    if ($resourceType === CHECKOUT_SCRIPT_TYPE) {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+
+        return preg_match(CHECKOUT_STATIC_SCRIPT_EXT_PATTERN, $path) === 1;
+    }
+
+    return false;
+}
+
+/**
+ * Решение по перехваченному запросу.
+ * - Документ оформления → стадия «оформление».
+ * - GET: блокируются адреса быстрого заказа и любые «заказные» запросы, кроме статических ассетов и самих страниц оформления.
+ * - Изменяющие запросы: на стадии оформления или на «заказной» URL блокируются всегда; на ранних стадиях действует
+ *   default-DENY — пропускаются только запросы с явным признаком добавления в корзину (в URL или теле) и без признаков заказа в теле.
+ *
+ * @param array<string, list<string>> $patterns
  * @return array{block: bool, stage: string}
  */
-function decideCheckoutRequest(string $method, string $url, string $resourceType, string $stage, array $patterns): array
-{
+function decideCheckoutRequest(
+    string $method,
+    string $url,
+    string $resourceType,
+    string $stage,
+    array $patterns,
+    ?string $postData = null
+): array {
     $subject = crawlUrlSubject($url);
     if ($resourceType === CHECKOUT_DOCUMENT_TYPE && matchesAnyPattern($subject, $patterns['checkout_document'])) {
         $stage = raiseCheckoutStage($stage, CHECKOUT_STEP_CHECKOUT);
     }
 
-    if (!in_array(strtoupper($method), CHECKOUT_MUTATING_METHODS, true)) {
-        return ['block' => false, 'stage' => $stage];
+    $isOrderUrl = matchesAnyPattern($subject, $patterns['order'])
+        && !matchesAnyPattern($subject, $patterns['add_to_cart']);
+    $isMutating = in_array(strtoupper($method), CHECKOUT_MUTATING_METHODS, true);
+
+    if (!$isMutating) {
+        $isInstantDoc = $resourceType === CHECKOUT_DOCUMENT_TYPE
+            && preg_match(CHECKOUT_INSTANT_ORDER_PATTERN, $subject) === 1;
+        $block = $isInstantDoc || ($isOrderUrl && !isStaticCheckoutAssetGet($url, $resourceType));
+
+        return ['block' => $block, 'stage' => $stage];
     }
-    if ($stage === CHECKOUT_STEP_CHECKOUT) {
+
+    if ($stage === CHECKOUT_STEP_CHECKOUT || $isOrderUrl) {
         return ['block' => true, 'stage' => $stage];
     }
 
-    $isOrder = matchesAnyPattern($subject, $patterns['order']) && !matchesAnyPattern($subject, $patterns['add_to_cart']);
+    $post = $postData !== null ? substr($postData, 0, CHECKOUT_POST_DATA_MAX_BYTES) : '';
+    $looksLikeAdd = matchesAnyPattern($subject, $patterns['add_to_cart'])
+        || ($post !== '' && matchesAnyPattern($post, $patterns['add_to_cart_body'] ?? []));
+    $looksLikeOrder = $post !== '' && matchesAnyPattern($post, $patterns['order_body'] ?? []);
 
-    return ['block' => $isOrder, 'stage' => $stage];
+    return ['block' => !$looksLikeAdd || $looksLikeOrder, 'stage' => $stage];
 }
 
 /**
@@ -410,7 +502,8 @@ function createCheckoutRequestStats(): array
 }
 
 /**
- * Учёт перехваченного запроса. В лог — только изменяющие запросы: метод, адрес без query, стадия, итог.
+ * Учёт перехваченного запроса. В лог — все изменяющие запросы и заблокированные не-изменяющие запросы:
+ * метод, адрес без query, стадия, итог.
  *
  * @param array<string, mixed> $stats из createCheckoutRequestStats()
  * @return array<string, mixed>
@@ -418,7 +511,8 @@ function createCheckoutRequestStats(): array
 function recordCheckoutRequest(array $stats, string $method, string $url, string $stage, bool $blocked): array
 {
     $method = strtoupper($method);
-    if (!in_array($method, CHECKOUT_MUTATING_METHODS, true)) {
+    $isMutating = in_array($method, CHECKOUT_MUTATING_METHODS, true);
+    if (!$isMutating && !$blocked) {
         return $stats;
     }
 
@@ -479,6 +573,7 @@ function normalizeCheckoutProbe(mixed $raw): array
                 'index'       => (int) $candidate['index'],
                 'text'        => (string) ($candidate['text'] ?? ''),
                 'attrs'       => (string) ($candidate['attrs'] ?? ''),
+                'form_action' => (string) ($candidate['form_action'] ?? ''),
                 'by_selector' => ($candidate['by_selector'] ?? false) === true,
                 'visible'     => ($candidate['visible'] ?? false) === true,
                 'disabled'    => ($candidate['disabled'] ?? false) === true,
@@ -506,14 +601,55 @@ function normalizeCheckoutProbe(mixed $raw): array
 }
 
 /**
- * Кнопку нельзя нажимать: текст или атрибуты из стоп-листа (покупка в 1 клик, оформление, оплата …).
+ * Опасен ли `action` родительской формы (или `formaction` кнопки): быстрый заказ, прямой переход на `/checkout/?`
+ * или признаки заказа/оплаты при отсутствии шаблона добавления в корзину.
+ */
+function isCheckoutFormActionForbidden(string $formAction, array $rules): bool
+{
+    if ($formAction === '') {
+        return false;
+    }
+    if (
+        preg_match(CHECKOUT_INSTANT_ORDER_PATTERN, $formAction) === 1
+        || preg_match(CHECKOUT_DIRECT_CHECKOUT_ADD_PATTERN, $formAction) === 1
+    ) {
+        return true;
+    }
+    if (matchesAnyPattern($formAction, $rules['requests']['add_to_cart'] ?? [])) {
+        return false;
+    }
+
+    return matchesAnyPattern($formAction, $rules['texts']['forbidden_attrs'] ?? [])
+        || matchesAnyPattern($formAction, $rules['requests']['order'] ?? [])
+        || matchesAnyPattern($formAction, $rules['requests']['order_body'] ?? []);
+}
+
+/**
+ * Кнопку нельзя нажимать: текст, атрибуты или `action` родительской формы ведут на оформление, оплату
+ * или покупку в 1 клик.
  *
- * @param array{text: string, attrs: string} $candidate
+ * @param array{text: string, attrs: string, form_action?: string} $candidate
  */
 function isForbiddenCheckoutButton(array $candidate, array $rules): bool
 {
-    return matchesAnyPattern($candidate['text'], $rules['texts']['forbidden_texts'])
-        || matchesAnyPattern($candidate['attrs'], $rules['texts']['forbidden_attrs']);
+    if (
+        matchesAnyPattern($candidate['text'], $rules['texts']['forbidden_texts'])
+        || matchesAnyPattern($candidate['attrs'], $rules['texts']['forbidden_attrs'])
+        || isCheckoutFormActionForbidden((string) ($candidate['form_action'] ?? ''), $rules)
+    ) {
+        return true;
+    }
+
+    // Кнопка с общим текстом «купить», у которой href/data-* указывает на заказ/оплату (и не на корзину), опасна
+    if (
+        $candidate['text'] === 'купить'
+        && preg_match(CHECKOUT_URL_ORDER_ATTR_PATTERN, $candidate['attrs']) === 1
+        && !matchesAnyPattern($candidate['attrs'], $rules['requests']['add_to_cart'] ?? [])
+    ) {
+        return true;
+    }
+
+    return false;
 }
 
 function isAddToCartText(string $text, array $rules): bool
@@ -752,12 +888,27 @@ function finishCheckoutWalk(array $steps, string $outcome, ?string $reason, ?str
 // ---------------------------------------------------------------------------------------------------------------
 
 /**
+ * Параметры запуска Chrome для сценария заказа: отключаем авто-разрешение всплывающих окон и блокируем
+ * открытие новых вкладок (`--block-new-web-contents`), чтобы запросы не обходили перехват вкладки.
+ *
+ * @return array<string, mixed>
+ */
+function buildCheckoutBrowserOptions(): array
+{
+    return [
+        'excludedSwitches' => [BROWSER_DISABLE_POPUP_BLOCKING_SWITCH],
+        'customFlags'      => [BROWSER_BLOCK_NEW_CONTENTS_FLAG],
+    ];
+}
+
+/**
  * Проход сценария в уже запущенном Chrome. Не бросает исключений: ошибка — `outcome = skipped`, причина
- * `scenario_error`. Вкладка закрывается в любом случае (браузер закрывает вызывающий).
+ * `scenario_error`. Вкладка закрывается без отключения перехвата (браузер закрывает вызывающий).
  *
  * @param array{url: string, found_by: string, cart: ?array, checkout: ?array} $target из selectCheckoutTarget()
  * @param array<string, mixed>  $rules     из buildCheckoutRules()
  * @param callable(): void|null $onProgress после каждой загрузки страницы (heartbeat)
+ * @param callable(string $host): list<string>|null $resolver
  * @return array{outcome: string, reason: ?string, detail: ?string, signal: ?string, steps: list<array>,
  *               requests: array<string, mixed>}
  */
@@ -766,29 +917,48 @@ function runCheckoutScenario(
     array $target,
     array $rules,
     string $siteHost,
-    ?callable $onProgress = null
+    ?callable $onProgress = null,
+    ?callable $resolver = null
 ): array {
+    $cachedResolver = createCachedBrowserResolver($resolver ?? 'resolveHostIps');
+    $run = [
+        'stage'             => CHECKOUT_STEP_PRODUCT,
+        'requests'          => createCheckoutRequestStats(),
+        'events'            => createBrowserEventState(null),
+        'recording'         => false,
+        'methods'           => [],
+        'responses'         => [],
+        'ssrf_blocked_main' => false,
+    ];
+    if (!isBrowserRequestAllowed((string) ($target['url'] ?? ''), $cachedResolver)) {
+        logWarning('Сценарий заказа: стартовый адрес заблокирован защитой от SSRF', [
+            'url' => sanitizeBrowserLogUrl((string) ($target['url'] ?? '')),
+        ]);
+
+        return [
+            'outcome'  => CHECKOUT_OUTCOME_SKIPPED,
+            'reason'   => CHECKOUT_REASON_PRODUCT_NOT_OPENED,
+            'detail'   => BROWSER_SSRF_BLOCKED_ERROR,
+            'signal'   => null,
+            'steps'    => [],
+            'requests' => $run['requests'],
+        ];
+    }
+
     $connection = $browser->getConnection();
     $wasStrict = $connection->isStrict();
     // Некоторые сайты передают в CDP-событии Fetch.requestPaused строку, которую библиотека не может декодировать
     // как JSON. Событие уже снято с сокета; пропущенный paused-запрос остаётся приостановленным и не уходит наружу.
     // Строгий режим вернётся перед закрытием отдельного браузера сценария.
     $connection->setStrict(false);
-    $run = [
-        'stage'     => CHECKOUT_STEP_PRODUCT,
-        'requests'  => createCheckoutRequestStats(),
-        'events'    => createBrowserEventState(null),
-        'recording' => false,
-        'methods'   => [],
-        'responses' => [],
-    ];
     $result = ['outcome' => CHECKOUT_OUTCOME_SKIPPED, 'reason' => CHECKOUT_REASON_ERROR, 'detail' => null, 'signal' => null,
         'steps' => []];
     $page = null;
+    $cleanupInterception = null;
 
     try {
         $page = $browser->createPage();
-        attachCheckoutListeners($page, $run, $rules);
+        $cleanupInterception = attachCheckoutListeners($page, $run, $rules, $cachedResolver);
         $result = walkCheckoutScenario($page, $run, $target, $rules, $siteHost, $onProgress ?? static function (): void {
         });
     } catch (Throwable $e) {
@@ -797,17 +967,16 @@ function runCheckoutScenario(
         $result['reason'] = CHECKOUT_REASON_ERROR;
         $result['detail'] = $e->getMessage() !== '' ? $e->getMessage() : get_class($e);
     } finally {
+        // Fetch.disable не вызываем: перехват остаётся активным во время pagehide/unload/sendBeacon до закрытия вкладки.
         if ($page !== null) {
-            try {
-                $page->getSession()->sendMessageSync(new Message('Fetch.disable'), BROWSER_COMMAND_TIMEOUT_MS);
-            } catch (Throwable) {
-                // вкладка закроется вместе с браузером
-            }
             try {
                 $page->close();
             } catch (Throwable) {
                 // вкладка закроется вместе с браузером
             }
+        }
+        if ($cleanupInterception !== null) {
+            $cleanupInterception();
         }
         $connection->setStrict($wasStrict);
     }
@@ -816,37 +985,19 @@ function runCheckoutScenario(
 }
 
 /**
- * Подписки вкладки: перехват запросов (включается сразу — без него сценарий не идёт), диалоги, ошибки консоли,
- * ответы после нажатия «В корзину».
+ * Подписки вкладки: перехват запросов (включается сразу, включая дочерние цели и обход Service Worker —
+ * без него сценарий не идёт), диалоги, ошибки консоли, ответы после нажатия «В корзину».
  *
- * @param array<string, mixed> $run состояние сценария (по ссылке)
+ * @param array<string, mixed>                      $run      состояние сценария (по ссылке)
+ * @param callable(string $host): list<string>|null $resolver
+ * @return callable(): void функция очистки слушателей и дочерних сессий (без `Fetch.disable`)
  */
-function attachCheckoutListeners(Page $page, array &$run, array $rules): void
+function attachCheckoutListeners(Page $page, array &$run, array $rules, ?callable $resolver = null): callable
 {
+    $effectiveResolver = $resolver ?? createCachedBrowserResolver('resolveHostIps');
     $session = $page->getSession();
-    $run['events'] = createBrowserEventState($page->getFrameManager()->getMainFrame()->getFrameId());
-
-    $session->on('method:Fetch.requestPaused', static function (array $params) use (&$run, $session, $rules): void {
-        $requestId = (string) ($params['requestId'] ?? '');
-        try {
-            $request = is_array($params['request'] ?? null) ? $params['request'] : [];
-            $method = (string) ($request['method'] ?? 'GET');
-            $url = (string) ($request['url'] ?? '');
-            $decision = decideCheckoutRequest($method, $url, (string) ($params['resourceType'] ?? ''), $run['stage'], $rules['requests']);
-            $run['stage'] = $decision['stage'];
-            $run['requests'] = recordCheckoutRequest($run['requests'], $method, $url, $run['stage'], $decision['block']);
-            $session->sendMessage($decision['block']
-                ? new Message('Fetch.failRequest', ['requestId' => $requestId, 'errorReason' => CHECKOUT_BLOCK_REASON])
-                : new Message('Fetch.continueRequest', ['requestId' => $requestId]));
-        } catch (Throwable) {
-            $run['requests']['errors']++;
-            try {
-                $session->sendMessage(new Message('Fetch.failRequest', ['requestId' => $requestId, 'errorReason' => CHECKOUT_BLOCK_REASON]));
-            } catch (Throwable) {
-                // запрос останется висеть до закрытия вкладки — не уйдёт
-            }
-        }
-    });
+    $mainFrameId = $page->getFrameManager()->getMainFrame()->getFrameId();
+    $run['events'] = createBrowserEventState($mainFrameId);
 
     $session->on('method:Page.javascriptDialogOpening', static function (array $params) use ($session): void {
         try {
@@ -878,13 +1029,47 @@ function attachCheckoutListeners(Page $page, array &$run, array $rules): void
 
     $session->sendMessageSync(new Message('Log.enable'), BROWSER_COMMAND_TIMEOUT_MS);
     $page->setDeviceMetricsOverride(buildViewportOverride(CHECKOUT_VIEWPORT_WIDTH))->await(BROWSER_COMMAND_TIMEOUT_MS);
-    $response = $session->sendMessageSync(
-        new Message('Fetch.enable', ['patterns' => [['urlPattern' => '*', 'requestStage' => 'Request']]]),
-        BROWSER_COMMAND_TIMEOUT_MS
+
+    return attachBrowserRequestInterception(
+        $page,
+        static function (array $params) use (&$run, $rules, $effectiveResolver, $mainFrameId): bool {
+            $request = is_array($params['request'] ?? null) ? $params['request'] : [];
+            $method = (string) ($request['method'] ?? 'GET');
+            $url = (string) ($request['url'] ?? '');
+            $resourceType = (string) ($params['resourceType'] ?? '');
+            $frameId = $params['frameId'] ?? null;
+
+            if (!isBrowserRequestAllowed($url, $effectiveResolver)) {
+                logWarning('Сценарий заказа: запрос заблокирован защитой от SSRF', [
+                    'url'           => sanitizeBrowserLogUrl($url),
+                    'resource_type' => $resourceType,
+                ]);
+                $run['requests'] = recordCheckoutRequest($run['requests'], $method, $url, $run['stage'], true);
+                if ($resourceType === CHECKOUT_DOCUMENT_TYPE && $frameId === $mainFrameId) {
+                    $run['ssrf_blocked_main'] = true;
+                }
+
+                return false;
+            }
+
+            $postData = extractCheckoutRequestPostData($request);
+            $decision = decideCheckoutRequest(
+                $method,
+                $url,
+                $resourceType,
+                $run['stage'],
+                $rules['requests'],
+                $postData
+            );
+            $run['stage'] = $decision['stage'];
+            $run['requests'] = recordCheckoutRequest($run['requests'], $method, $url, $run['stage'], $decision['block']);
+
+            return !$decision['block'];
+        },
+        static function () use (&$run): void {
+            $run['requests']['errors']++;
+        }
     );
-    if (!$response->isSuccessful()) {
-        throw new RuntimeException('перехват запросов не включился: ' . $response->getErrorMessage());
-    }
 }
 
 /**
@@ -992,8 +1177,22 @@ function walkCheckoutScenario(Page $page, array &$run, array $target, array $rul
 function openCheckoutStepPage(Page $page, array &$run, string $code, string $url, string $foundBy, array $rules): array
 {
     $run['events'] = createBrowserEventState($run['events']['main_frame_id']);
-    $navigation = navigateBrowserPage($page, $url, CHECKOUT_STEP_TIMEOUT_MS);
+    $run['ssrf_blocked_main'] = false;
+    $navigation = navigateBrowserPage(
+        $page,
+        $url,
+        CHECKOUT_STEP_TIMEOUT_MS,
+        static function () use (&$run): bool {
+            return !empty($run['ssrf_blocked_main']);
+        }
+    );
     $step = makeCheckoutStep($code, CHECKOUT_STATUS_DONE, $url, $foundBy, ['dom_ms' => $navigation['dom_ms'] ?? null]);
+
+    if (!empty($run['ssrf_blocked_main'])) {
+        $step['status'] = CHECKOUT_STATUS_FAILED;
+
+        return ['step' => array_merge($step, takeCheckoutConsole($run)), 'probe' => null, 'error' => BROWSER_SSRF_BLOCKED_ERROR];
+    }
 
     if ($navigation['status'] !== BROWSER_PAGE_OPENED) {
         $step['status'] = CHECKOUT_STATUS_FAILED;

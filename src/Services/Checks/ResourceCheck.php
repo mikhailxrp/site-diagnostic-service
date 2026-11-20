@@ -51,19 +51,26 @@ const RESOURCE_MODERN_FONT_EXTENSION = 'woff2';
 
 const RESOURCE_CSS_MAX_DEPTH = 1; // CSS страницы — 0, его @import — 1; @import внутри импортированного не разбирается
 const RESOURCE_PROGRESS_EVERY = 10; // раз в столько проверенных ресурсов — `onProgress` (heartbeat воркера)
+const RESOURCE_EXISTENCE_PROBE_BYTES = 1; // минимальный Range-запрос при отказе HEAD
+const RESOURCE_RANGE_NOT_SATISFIABLE_STATUS = 416; // пустой файл (0 байт) отвечает 416 на Range: bytes=0-0
+const RESOURCE_MAX_PER_DIAGNOSTIC = 500; // жёсткий лимит уникальных ресурсов за диагностику (решение владельца, 20.11.2026)
 
 /**
  * Ресурсы всех проверяемых страниц (`collectResourcePages()`) с общим кэшем: адрес, подключённый на нескольких
  * страницах (или в общем CSS), запрашивается один раз. Битый ресурс — одна находка: `page_id` — первая страница,
  * все страницы — `evidence.pages`. Заглушки защиты от ботов (`bot_protection`) не проверяются.
  *
- * @param array<string, mixed>                         $context    контекст шага (`buildStepContext()`)
- * @param callable(string $url, string $method): array $request    результат как у `httpRequest()`
- * @param callable(int $checked): void|null            $onProgress вызывается каждые RESOURCE_PROGRESS_EVERY ресурсов
+ * @param array<string, mixed>                                          $context      контекст шага (`buildStepContext()`)
+ * @param callable(string $url, string $method, ?int $maxBytes=): array $request      результат как у `httpRequest()`
+ * @param callable(int $checked): void|null                             $onProgress   вызывается каждые RESOURCE_PROGRESS_EVERY ресурсов
  * @return array{status: string, message: string, facts: array, findings: list<array>}
  */
-function runResourceCheck(array $context, callable $request, ?callable $onProgress = null): array
-{
+function runResourceCheck(
+    array $context,
+    callable $request,
+    ?callable $onProgress = null,
+    int $maxResources = RESOURCE_MAX_PER_DIAGNOSTIC
+): array {
     $home = $context['facts']['availability']['home'] ?? null;
     if (!is_array($home) || ($home['status'] ?? null) === null) {
         return ['status' => 'skipped', 'message' => RESOURCES_NO_HOME_MESSAGE, 'facts' => [], 'findings' => []];
@@ -73,6 +80,7 @@ function runResourceCheck(array $context, callable $request, ?callable $onProgre
     // адрес → ['resource' => …, 'checked' => ?array, 'pages' => [индекс страницы => true], 'parents' => [адрес CSS => true]]
     $entries = [];
     $checkedCount = 0;
+    $skippedByLimit = 0;
 
     foreach ($pages as $index => $page) {
         if ($page['bot_protection'] !== null) {
@@ -82,30 +90,26 @@ function runResourceCheck(array $context, callable $request, ?callable $onProgre
         // Очередь пополняется по ходу: в скачанных CSS находятся шрифты, картинки и @import
         $queue = [];
         foreach (collectPageResources(parseHtml($page['body'], $page['url']), $page['url']) as $resource) {
-            if (!isset($entries[$resource['url']])) {
-                $entries[$resource['url']] = ['resource' => $resource, 'checked' => null, 'pages' => [], 'parents' => []];
-                $queue[] = $resource['url'];
-            }
-            $entries[$resource['url']]['pages'][$index] = true;
+            enqueueResourceEntry($entries, $queue, $resource, $index, null, $maxResources, $skippedByLimit);
         }
 
         for ($i = 0; $i < count($queue); $i++) {
             $resource = $entries[$queue[$i]]['resource'];
             $isStyle = $resource['type'] === RESOURCE_TYPE_STYLE;
-            $checked = checkResource($resource['url'], $isStyle, $request);
+            $parseCss = $isStyle && $resource['css_depth'] <= RESOURCE_CSS_MAX_DEPTH;
+            $checked = checkResource($resource['url'], $parseCss, $request);
+            $cssBody = $parseCss ? $checked['body'] : '';
+            unset($checked['body']);
             $entries[$resource['url']]['checked'] = $checked;
             $checkedCount++;
 
-            if ($isStyle && $resource['css_depth'] <= RESOURCE_CSS_MAX_DEPTH && $checked['status'] === RESOURCE_OK_STATUS) {
+            if ($parseCss && $checked['status'] === RESOURCE_OK_STATUS && $cssBody !== '') {
                 $cssUrl = $checked['final_url'] ?? $resource['url'];
-                foreach (extractCssResources($checked['body'], $cssUrl, $resource['url'], $resource['css_depth'] + 1) as $nested) {
-                    if (!isset($entries[$nested['url']])) {
-                        $entries[$nested['url']] = ['resource' => $nested, 'checked' => null, 'pages' => [], 'parents' => []];
-                        $queue[] = $nested['url'];
-                    }
-                    $entries[$nested['url']]['parents'][$resource['url']] = true;
+                foreach (extractCssResources($cssBody, $cssUrl, $resource['url'], $resource['css_depth'] + 1) as $nested) {
+                    enqueueResourceEntry($entries, $queue, $nested, null, $resource['url'], $maxResources, $skippedByLimit);
                 }
             }
+            unset($cssBody);
 
             if ($onProgress !== null && $checkedCount % RESOURCE_PROGRESS_EVERY === 0) {
                 $onProgress($checkedCount);
@@ -142,16 +146,61 @@ function runResourceCheck(array $context, callable $request, ?callable $onProgre
 
     return [
         'status'   => 'done',
-        'message'  => buildResourcesStepMessage(count($pages) - $blocked, $blocked, count($resources), count($findings), 0, 0),
+        'message'  => buildResourcesStepMessage(
+            count($pages) - $blocked,
+            $blocked,
+            count($resources),
+            count($findings),
+            0,
+            0,
+            $skippedByLimit
+        ),
         'facts'    => [
-            'pages'     => $pageFacts,
-            'resources' => $resources,
-            // Возможная защита от ботов на главной или обрезанный HTML — проверены не все ресурсы
-            'limited'   => !empty($home['possible_bot_protection'])
-                || in_array(true, array_column($pages, 'truncated'), true),
+            'pages'            => $pageFacts,
+            'resources'        => $resources,
+            // Возможная защита от ботов на главной, обрезанный HTML или предел числа ресурсов
+            'limited'          => !empty($home['possible_bot_protection'])
+                || in_array(true, array_column($pages, 'truncated'), true)
+                || $skippedByLimit > 0,
+            'skipped_by_limit' => $skippedByLimit,
         ],
         'findings' => $findings,
     ];
+}
+
+/**
+ * Добавляет уникальный ресурс в `$entries` и `$queue` с учётом лимита, всегда сохраняя привязки к страницам/CSS.
+ *
+ * @param array<string, array{resource: array, checked: ?array, pages: array<int, true>, parents: array<string, true>}> $entries
+ * @param list<string>                                                                                                   $queue
+ * @param array<string, mixed>                                                                                           $resource
+ */
+function enqueueResourceEntry(
+    array &$entries,
+    array &$queue,
+    array $resource,
+    ?int $pageIndex,
+    ?string $parentUrl,
+    int $maxResources,
+    int &$skippedByLimit
+): void {
+    $url = $resource['url'];
+    if (!isset($entries[$url])) {
+        if (count($entries) >= max(0, $maxResources)) {
+            $skippedByLimit++;
+
+            return;
+        }
+        $entries[$url] = ['resource' => $resource, 'checked' => null, 'pages' => [], 'parents' => []];
+        $queue[] = $url;
+    }
+
+    if ($pageIndex !== null) {
+        $entries[$url]['pages'][$pageIndex] = true;
+    }
+    if ($parentUrl !== null) {
+        $entries[$url]['parents'][$parentUrl] = true;
+    }
 }
 
 /**
@@ -409,21 +458,26 @@ function normalizeResourceUrl(string $url): string
 }
 
 /**
- * HEAD; неудача (4xx/5xx или нет ответа) перепроверяется через GET — многие серверы и сервисы отвечают
- * на HEAD 404/405/418 или не отвечают вовсе, хотя GET работает. `$needBody` (CSS) — сразу GET.
+ * HEAD; неудача (4xx/5xx или нет ответа) перепроверяется через GET с `Range` на 1 байт — многие серверы отвечают
+ * на HEAD 404/405/418 или не отвечают вовсе, хотя GET работает; на 416 (пустой файл) — один повтор без Range.
+ * `$needBody` (разбираемый CSS) — сразу полный GET. Если тело не нужно, в возврате оно всегда пустое.
  *
- * @param callable(string $url, string $method): array $request
+ * @param callable(string $url, string $method, ?int $maxBytes=): array $request
  * @return array{method: string, status: ?int, time_ms: int, error: ?string, final_url: ?string, body: string}
  */
 function checkResource(string $url, bool $needBody, callable $request): array
 {
     $method = $needBody ? 'GET' : 'HEAD';
-    $response = $request($url, $method);
+    $response = $request($url, $method, null);
 
     $status = $response['status'] ?? null;
     if ($method === 'HEAD' && ($status === null || $status >= RESOURCE_BROKEN_STATUS_MIN)) {
         $method = 'GET';
-        $response = $request($url, $method);
+        $response = $request($url, $method, RESOURCE_EXISTENCE_PROBE_BYTES);
+
+        if (($response['status'] ?? null) === RESOURCE_RANGE_NOT_SATISFIABLE_STATUS) {
+            $response = $request($url, $method, null);
+        }
     }
 
     return [
@@ -432,7 +486,7 @@ function checkResource(string $url, bool $needBody, callable $request): array
         'time_ms'   => (int) ($response['time_ms'] ?? 0),
         'error'     => $response['error'] ?? null,
         'final_url' => $response['final_url'] ?? null,
-        'body'      => (string) ($response['body'] ?? ''),
+        'body'      => $needBody ? (string) ($response['body'] ?? '') : '',
     ];
 }
 
@@ -500,9 +554,13 @@ function buildResourcesStepMessage(
     int $checked,
     int $broken,
     int $phpErrors,
-    int $mixedContent
+    int $mixedContent,
+    int $skippedByLimit = 0
 ): string {
     $pagesPart = $blocked > 0 ? "Проверено страниц: {$pages}, не удалось: {$blocked}" : "Проверено страниц: {$pages}";
+    $resourcesPart = $skippedByLimit > 0
+        ? "ресурсов: {$checked} (предел, пропущено: {$skippedByLimit}), битых: {$broken}"
+        : "ресурсов: {$checked}, битых: {$broken}";
 
-    return "{$pagesPart}; ресурсов: {$checked}, битых: {$broken}; PHP-ошибок: {$phpErrors}; mixed content: {$mixedContent}";
+    return "{$pagesPart}; {$resourcesPart}; PHP-ошибок: {$phpErrors}; mixed content: {$mixedContent}";
 }

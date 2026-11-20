@@ -33,14 +33,27 @@ function insertFinding(int $diagnosticId, array $finding): int
         'title'         => $finding['title'],
         'details'       => $finding['details'],
         'location'      => $finding['location'],
-        'evidence'      => $finding['evidence'] !== null
-            ? json_encode($finding['evidence'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
-            : null,
+        'evidence'      => encodeFindingEvidence($finding['evidence']),
         'fingerprint'   => $finding['fingerprint'],
         'ai_result_id'  => $finding['ai_result_id'] ?? null,
     ]);
 
     return (int) $pdo->lastInsertId();
+}
+
+/**
+ * Кодирует `evidence` в JSON: невалидные байты UTF-8 (например, с сайтов в windows-1251) заменяются.
+ *
+ * @param array<string, mixed>|null $evidence
+ */
+function encodeFindingEvidence(?array $evidence): ?string
+{
+    return $evidence !== null
+        ? json_encode(
+            $evidence,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR
+        )
+        : null;
 }
 
 /**

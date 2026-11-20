@@ -179,19 +179,29 @@ function validateSiteHost(string $host, callable $resolver): ?string
 }
 
 /**
- * Настоящий DNS: IPv4 и IPv6 (AAAA). Без предупреждений PHP, если домена нет.
+ * Настоящий DNS: IPv4 и IPv6 (AAAA). Без предупреждений PHP, если домена нет или AAAA временно недоступен.
  *
+ * @param callable(string $host): list<string>|null $ipv4Lookup null — `gethostbynamel()`
+ * @param callable(string $host): array|false|null  $aaaaLookup null — `dns_get_record(..., DNS_AAAA)`
  * @return list<string>
  */
-function resolveHostIps(string $host): array
+function resolveHostIps(string $host, ?callable $ipv4Lookup = null, ?callable $aaaaLookup = null): array
 {
-    $ips = gethostbynamel($host) ?: [];
+    $ips = $ipv4Lookup !== null ? $ipv4Lookup($host) : (gethostbynamel($host) ?: []);
 
-    if (checkdnsrr($host, 'AAAA')) {
-        foreach (dns_get_record($host, DNS_AAAA) ?: [] as $record) {
-            if (isset($record['ipv6']) && is_string($record['ipv6'])) {
-                $ips[] = $record['ipv6'];
-            }
+    set_error_handler(static fn (): bool => true);
+    try {
+        $records = ($aaaaLookup !== null ? $aaaaLookup($host) : dns_get_record($host, DNS_AAAA)) ?: [];
+    } catch (Throwable) {
+        // временный сбой AAAA не отменяет проверку по A-записям
+        $records = [];
+    } finally {
+        restore_error_handler();
+    }
+
+    foreach ($records as $record) {
+        if (isset($record['ipv6']) && is_string($record['ipv6'])) {
+            $ips[] = $record['ipv6'];
         }
     }
 

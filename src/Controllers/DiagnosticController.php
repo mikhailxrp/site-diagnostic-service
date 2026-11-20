@@ -294,6 +294,8 @@ final class DiagnosticController
 
     public function status(string $id): void
     {
+        closeSessionWrite();
+
         $diagnosticId = parseDiagnosticId($id);
 
         try {
@@ -492,7 +494,7 @@ final class DiagnosticController
         $message = mb_substr('Не удалось запустить воркер: ' . $reason, 0, self::ERROR_MESSAGE_MAX_LENGTH);
 
         try {
-            finishDiagnostic($diagnosticId, 'failed', $message);
+            failQueuedDiagnostic($diagnosticId, $message);
         } catch (Throwable $e) {
             logException($e, ['diagnostic_id' => $diagnosticId]);
         }

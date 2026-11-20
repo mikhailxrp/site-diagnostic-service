@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use ErrorException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -310,5 +311,110 @@ final class HttpClientTest extends TestCase
         $headers = addHeaderLine($headers, 'Server: nginx');
 
         $this->assertSame(['server' => ['nginx']], $headers);
+    }
+
+    public function testPrepareRequestTargetCanonicalizesHostAndDropsFragment(): void
+    {
+        $target = prepareRequestTarget('http://Example.COM./a?b=1#frag', $this->resolver(['example.com' => ['1.1.1.1']]));
+        $this->assertSame([
+            'host' => 'example.com',
+            'port' => 80,
+            'ip'   => '1.1.1.1',
+            'url'  => 'http://example.com/a?b=1',
+        ], $target);
+
+        $withPort = prepareRequestTarget('https://Example.COM.:8443', $this->resolver(['example.com' => ['1.1.1.1']]));
+        $this->assertSame('https://example.com:8443/', $withPort['url']);
+        $this->assertSame(8443, $withPort['port']);
+        $this->assertSame('example.com', $withPort['host']);
+
+        $ipv6 = prepareRequestTarget('http://[2606:2800:220:1:248:1893:25c8:1946]:8080/x', $this->resolver());
+        $this->assertSame([
+            'host' => '2606:2800:220:1:248:1893:25c8:1946',
+            'port' => 8080,
+            'ip'   => '2606:2800:220:1:248:1893:25c8:1946',
+            'url'  => 'http://[2606:2800:220:1:248:1893:25c8:1946]:8080/x',
+        ], $ipv6);
+    }
+
+    public function testPrepareRequestTargetConvertsIdnHostToPunycodeInUrl(): void
+    {
+        $punycode = 'xn--e1afmkfd.xn--p1ai';
+        $target = prepareRequestTarget('https://пример.рф/каталог?q=1', $this->resolver([$punycode => ['1.1.1.1']]));
+
+        $this->assertSame([
+            'host' => $punycode,
+            'port' => 443,
+            'ip'   => '1.1.1.1',
+            'url'  => "https://{$punycode}/каталог?q=1",
+        ], $target);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function invalidTargetUrls(): array
+    {
+        return [
+            'пробел'     => ['https://shop.ru/a b'],
+            'CRLF'       => ["https://shop.ru/a\r\nX: 1"],
+            'NUL-байт'   => ["https://shop.ru/\x00"],
+            'NBSP'       => ["https://shop.ru/\u{00A0}a"],
+            'порт ноль'  => ['http://shop.ru:0/'],
+        ];
+    }
+
+    #[DataProvider('invalidTargetUrls')]
+    public function testPrepareRequestTargetRejectsWhitespaceControlCharsAndInvalidPort(string $url): void
+    {
+        $called = false;
+        $target = prepareRequestTarget($url, static function () use (&$called): array {
+            $called = true;
+
+            return [self::PUBLIC_IP];
+        });
+
+        $this->assertArrayHasKey('error', $target);
+        $this->assertFalse($called);
+    }
+
+    public function testHttpRequestSendsCanonicalUrlMatchingPinnedHost(): void
+    {
+        $punycode = 'xn--e1afmkfd.xn--p1ai';
+        $result = httpRequest(
+            'http://Example.COM./a?b=1#top',
+            'GET',
+            $this->resolver(['example.com' => ['1.1.1.1'], $punycode => ['2.2.2.2']]),
+            $this->transport([
+                'http://example.com/a?b=1'     => $this->redirect(302, 'https://пример.рф/page'),
+                "https://{$punycode}/page"     => ['status' => 200, 'body' => 'ok'],
+            ])
+        );
+
+        $this->assertNull($result['error']);
+        $this->assertSame(200, $result['status']);
+        $this->assertSame("https://{$punycode}/page", $result['final_url']);
+        $this->assertCount(2, $this->sent);
+        $this->assertSame('http://example.com/a?b=1', $this->sent[0]['url']);
+        $this->assertSame('example.com', $this->sent[0]['host']);
+        $this->assertSame('1.1.1.1', $this->sent[0]['ip']);
+        $this->assertSame("https://{$punycode}/page", $this->sent[1]['url']);
+        $this->assertSame($punycode, $this->sent[1]['host']);
+        $this->assertSame('2.2.2.2', $this->sent[1]['ip']);
+    }
+
+    public function testThrowingResolverDoesNotCrashHttpRequest(): void
+    {
+        $result = httpRequest(
+            'https://shop.ru/',
+            'GET',
+            static fn (): array => throw new ErrorException('DNS SERVFAIL'),
+            $this->transport([])
+        );
+
+        $this->assertNotNull($result['error']);
+        $this->assertStringContainsString('DNS SERVFAIL', $result['error']);
+        $this->assertNull($result['status']);
+        $this->assertSame([], $this->sent);
     }
 }

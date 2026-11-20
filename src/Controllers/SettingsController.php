@@ -97,6 +97,7 @@ final class SettingsController
             redirect('/settings');
         }
 
+        closeSessionWrite();
         $check = checkChrome(resolveChromePath($value));
         setFlash($check['ok'] ? 'success' : 'error', $check['message']);
         redirect('/settings');
@@ -135,12 +136,19 @@ final class SettingsController
             redirect('/settings');
         }
 
-        setFlash('success', 'Настройки сохранены.');
-        if ($catalog['models'] === null) {
-            setFlash('warning', sprintf(self::MODELS_UNCHECKED_MESSAGE, $catalog['error']));
-        }
+        $warningMessage = $catalog['models'] === null
+            ? sprintf(self::MODELS_UNCHECKED_MESSAGE, $catalog['error'])
+            : null;
+
         if (input('action') === self::ACTION_CHECK) {
-            $this->checkConnection(array_values(array_unique($values)));
+            closeSessionWrite();
+            $this->checkConnection(array_values(array_unique($values)), $warningMessage);
+            redirect('/settings');
+        }
+
+        setFlash('success', 'Настройки сохранены.');
+        if ($warningMessage !== null) {
+            setFlash('warning', $warningMessage);
         }
 
         redirect('/settings');
@@ -151,13 +159,17 @@ final class SettingsController
      *
      * @param list<string> $models
      */
-    private function checkConnection(array $models): void
+    private function checkConnection(array $models, ?string $warningMessage = null): void
     {
         set_time_limit(count($models) * AI_CHECK_TIMEOUT_SECONDS * AI_MAX_ATTEMPTS + self::AI_CHECK_EXTRA_SECONDS);
 
         $key = env('ROUTERAI_API_KEY', '');
         $keyError = validateAiKey($key);
         if ($keyError !== null) {
+            setFlash('success', 'Настройки сохранены.');
+            if ($warningMessage !== null) {
+                setFlash('warning', $warningMessage);
+            }
             setFlash('error', $keyError);
 
             return;
@@ -175,8 +187,12 @@ final class SettingsController
             }
         }
 
-        if ($passed !== []) {
-            setFlash('success', 'Подключение работает: ' . implode('; ', $passed) . '.');
+        setFlash(
+            'success',
+            $passed !== [] ? 'Подключение работает: ' . implode('; ', $passed) . '.' : 'Настройки сохранены.'
+        );
+        if ($warningMessage !== null) {
+            setFlash('warning', $warningMessage);
         }
         if ($failed !== []) {
             setFlash('error', 'Проверка подключения не прошла. ' . implode(' ', $failed));

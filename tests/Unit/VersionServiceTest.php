@@ -56,6 +56,32 @@ final class VersionServiceTest extends TestCase
         $this->assertGreaterThan(0, compareVersions('4.10.0', '4.9.9'));
     }
 
+    /**
+     * @return array<string, array{string, string, int}>
+     */
+    public static function compareEdgeCases(): array
+    {
+        return [
+            '6.4 == 6.4.0'              => ['6.4', '6.4.0', 0],
+            '6.4 == 6.4.0.0'            => ['6.4', '6.4.0.0', 0],
+            '5.0 == 5.0.0'              => ['5.0', '5.0.0', 0],
+            '3.0.0 > 3.0.0-beta.4'      => ['3.0.0', '3.0.0-beta.4', 1],
+            '3.0 > 3.0.0-beta.4'        => ['3.0', '3.0.0-beta.4', 1],
+            '1.4.1-rc2 < 1.4.1'         => ['1.4.1-rc2', '1.4.1', -1],
+            '1.4.1-RC2 < 1.4.1'         => ['1.4.1-RC2', '1.4.1', -1],
+            '1.0-p1 > 1.0'              => ['1.0-p1', '1.0', 1],
+            '1.0.0-p1 > 1.0'            => ['1.0.0-p1', '1.0', 1],
+            '6.0.0-rc1 < 6.0.0'         => ['6.0.0-rc1', '6.0.0', -1],
+            'v3.6.0 == 3.6'             => ['v3.6.0', '3.6', 0],
+        ];
+    }
+
+    #[DataProvider('compareEdgeCases')]
+    public function testCompareVersionsHandlesTrailingZerosAndPrereleases(string $a, string $b, int $expectedSign): void
+    {
+        $this->assertSame($expectedSign, compareVersions($a, $b) <=> 0);
+    }
+
     public function testPickLatestStableIgnoresPreReleasesAndOrder(): void
     {
         $this->assertSame('2.4.9', pickLatestStableVersion(['2.4.10-alpha1', '2.4.7-p8', '2.4.9', '2.4.8-p3']));

@@ -27,6 +27,8 @@ const STACK_EVIDENCE_MAX_ITEMS         = 5;   // в БД — не больше 5
 const STACK_EVIDENCE_DETAIL_MAX_LENGTH = 255;
 const STACK_NAME_MAX_LENGTH            = 150; // как stack_items.name
 const STACK_VERSION_MAX_LENGTH         = 50;  // как stack_items.version
+const STACK_MAX_PLUGINS_PER_CMS        = 100; // лимит уникальных плагинов на CMS (решение владельца, 20.11.2026)
+const STACK_MAX_THEMES_PER_CMS         = 20;  // лимит уникальных тем на CMS (решение владельца, 20.11.2026)
 
 const STACK_VERSION_PATTERN    = '\d+(?:\.\d+)+';
 const STACK_VERSION_QUERY_KEYS = ['ver', 'v', 'version'];
@@ -146,7 +148,7 @@ function addStackSignal(
         }
     }
 
-    $detail = mb_substr($detail, 0, STACK_EVIDENCE_DETAIL_MAX_LENGTH);
+    $detail = mb_substr(mb_scrub($detail, 'UTF-8'), 0, STACK_EVIDENCE_DETAIL_MAX_LENGTH, 'UTF-8');
     $evidenceKey = $source . ':' . $detail;
     if (!isset($item['evidence'][$evidenceKey]) && count($item['evidence']) < STACK_EVIDENCE_MAX_ITEMS) {
         $item['evidence'][$evidenceKey] = ['source' => $source, 'detail' => $detail];
@@ -416,8 +418,14 @@ function findFirstMatch(array $values, string $pattern): ?string
  *
  * @param list<string> $urls
  */
-function detectThemesAndPlugins(array $items, array $urls, array $platforms, array $libraries = []): array
-{
+function detectThemesAndPlugins(
+    array $items,
+    array $urls,
+    array $platforms,
+    array $libraries = [],
+    int $maxPlugins = STACK_MAX_PLUGINS_PER_CMS,
+    int $maxThemes = STACK_MAX_THEMES_PER_CMS
+): array {
     $pluginPlatforms = [];
     foreach ($platforms as $key => $platform) {
         if (isset($platform['plugin_slug'])) {
@@ -436,12 +444,15 @@ function detectThemesAndPlugins(array $items, array $urls, array $platforms, arr
         ];
 
         foreach ($kinds as $category => [$patterns, $ignore]) {
+            $limit = $category === 'plugin' ? max(0, $maxPlugins) : max(0, $maxThemes);
+            $seen = [];
+
             foreach ($urls as $url) {
                 foreach ($patterns as $pattern) {
                     if (preg_match($pattern, $url, $match) !== 1) {
                         continue;
                     }
-                    $name = rawurldecode($match[1]);
+                    $name = mb_scrub(rawurldecode($match[1]), 'UTF-8');
                     if ($name === '' || isIgnoredStackName($name, $ignore)) {
                         continue;
                     }
@@ -450,8 +461,18 @@ function detectThemesAndPlugins(array $items, array $urls, array $platforms, arr
                     $base = $platformPlugin !== null
                         ? ['key' => $platformPlugin['key'], 'category' => 'plugin', 'name' => $platformPlugin['name']]
                         : ['category' => $category, 'name' => $name, 'parent' => $key];
+                    $id = stackItemId($base['category'], $base['name']);
 
-                    $weight = isset($items[stackItemId($base['category'], $base['name'])]) ? STACK_WEIGHT_WEAK : STACK_WEIGHT_FIRST;
+                    if ($platformPlugin === null && !isset($items[$id]) && !isset($seen[$id])) {
+                        if (count($seen) >= $limit) {
+                            break;
+                        }
+                        $seen[$id] = true;
+                    } elseif ($platformPlugin === null) {
+                        $seen[$id] = true;
+                    }
+
+                    $weight = isset($items[$id]) ? STACK_WEIGHT_WEAK : STACK_WEIGHT_FIRST;
                     $version = !empty($platform['asset_versions']) ? extractQueryVersion($url) : null;
                     $versionWeight = $version !== null ? rateAssetVersion($url, $name, $libraries) : 0;
                     $items = addStackSignal($items, $base, 'url:' . $url, $weight, 'url', $url, $version, $versionWeight);
@@ -577,9 +598,26 @@ function extractPathVersion(string $url): ?string
  */
 function extractQueryVersion(string $url): ?string
 {
-    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+    $query = (string) parse_url($url, PHP_URL_QUERY);
+    if ($query === '') {
+        return null;
+    }
+
+    $keys = implode('|', array_map(static fn (string $key): string => preg_quote($key, '~'), STACK_VERSION_QUERY_KEYS));
+    if (preg_match_all('~(?:^|&)(' . $keys . ')=([^&]+)~i', $query, $matches, PREG_SET_ORDER) < 1) {
+        return null;
+    }
+
+    $byKey = [];
+    foreach ($matches as $match) {
+        $byKey[strtolower($match[1])] = rawurldecode($match[2]);
+    }
+
     foreach (STACK_VERSION_QUERY_KEYS as $key) {
-        $version = is_string($query[$key] ?? null) ? extractVersionString($query[$key], true) : null;
+        if (!isset($byKey[$key])) {
+            continue;
+        }
+        $version = extractVersionString($byKey[$key], true);
         if ($version !== null) {
             return $version;
         }
@@ -748,8 +786,8 @@ function finalizeStackItems(array $items): array
             'key'        => $item['key'],
             'parent'     => $item['parent'],
             'category'   => $item['category'],
-            'name'       => mb_substr($item['name'], 0, STACK_NAME_MAX_LENGTH),
-            'version'    => $version !== null ? mb_substr($version, 0, STACK_VERSION_MAX_LENGTH) : null,
+            'name'       => mb_substr(mb_scrub($item['name'], 'UTF-8'), 0, STACK_NAME_MAX_LENGTH, 'UTF-8'),
+            'version'    => $version !== null ? mb_substr(mb_scrub($version, 'UTF-8'), 0, STACK_VERSION_MAX_LENGTH, 'UTF-8') : null,
             'confidence' => rateStackConfidence($score),
             'evidence'   => array_values($item['evidence']),
             'score'      => $score,

@@ -1,45 +1,33 @@
----
-description: General coding principles for all projects
-alwaysApply: true
----
+# Общие правила кодирования
 
-## Universal
+## Базовые принципы
 
-- One file = one responsibility
-- Always handle errors explicitly (try/catch, fallback UI)
-- No magic numbers — use named constants
-- Prefer simple over clever
-- Never hardcode secrets — always use .env
-- Before writing code — make sure you understand the task fully
-- If task is unclear — ask ONE question before coding
+- Один файл — одна ответственность.
+- Все ошибки обрабатывай явно (`try/catch`, понятное сообщение пользователю / fallback UI, подробности в лог).
+- Никаких «магических» чисел — используй именованные константы (тайм-ауты, лимиты, размеры окон и т. д.).
+- Простое и предсказуемое решение всегда лучше «хитрого».
+- Секреты и API-ключи никогда не хардкодятся — только `.env` через `env()`.
+- Перед правкой кода убедись, что понимаешь задачу и фактическое устройство затронутых модулей.
+- Если продуктовое требование неоднозначно — задай один конкретный вопрос до начала реализации.
 
 ## PHP
 
-- PSR-12 code style
-- Always add `declare(strict_types=1)` at the top of every file
-- Prefer functions over classes unless OOP is clearly justified
-- Use `match` over `switch`, `??` over long ternary chains
-- Always validate and sanitize external input
-- No inline SQL — use PDO with prepared statements only
-- Separate config / routing / templates
-- No mixed PHP/HTML — logic and presentation in separate files
+- Стиль PSR-12 и `declare(strict_types=1);` в начале каждого PHP-файла.
+- Используй возможности PHP 8.3: `match`, `??`, именованные аргументы, строгие типы.
+- Валидируй и нормализуй любые внешние входные данные до использования.
+- Никакого inline SQL — только PDO с подготовленными выражениями (`prepare`/`execute`).
+- Чёткое разделение: конфигурация / роутинг / контроллеры / модели / сервисы / шаблоны.
+- Не смешивай бизнес-логику, SQL и HTML-разметку в одном файле.
 
-## HTML
+## HTML и CSS
 
-- Semantic tags first: `<main>`, `<section>`, `<article>`, `<nav>`
-- Accessibility required: `alt` on images, `aria-*` and `role` where needed
-- No inline styles — use classes
-
-## CSS
-
-- Mobile-first by default
-- BEM for plain CSS projects
-- Use CSS custom properties instead of magic numbers
-- Avoid `!important` except for utility overrides
-- Group properties: positioning → box model → typography → visual → animation
+- Семантическая разметка: `<main>`, `<section>`, `<article>`, `<nav>`, корректные заголовки.
+- Доступность: `alt` у изображений, `aria-*` и `role` где необходимо, видимый фокус.
+- Никаких inline-стилей (`style=""`) и тегов `<style>` внутри Views.
+- Интерфейс строится на компонентах локального Tabler; минимальные правки стилей — только в `public/assets/css/admin-theme.css` и `public/assets/css/print.css`.
 
 ## JavaScript
 
-- ES Modules, async/await, arrow functions
-- Functional style only — no class-based components
-- No jQuery, no global variables
+- Vanilla JS (ES6+, `async/await`, стрелочные функции), без jQuery и глобальных переменных.
+- Функциональный стиль, без лишних зависимостей и фреймворков.
+- Прогрессивное улучшение: базовые ссылки, формы и навигация должны работать предсказуемо и без ошибок в консоли браузера.

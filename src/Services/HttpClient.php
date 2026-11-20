@@ -21,6 +21,10 @@ const HTTP_ACCEPT_LANGUAGE         = 'ru-RU,ru;q=0.9,en;q=0.8';
 const HTTP_REDIRECT_CODES = [301, 302, 303, 307, 308];
 const HTTP_ALLOWED_METHODS = ['GET', 'HEAD'];
 const HTTP_DEFAULT_PORTS = ['http' => 80, 'https' => 443];
+const HTTP_MIN_PORT = 1;
+const HTTP_MAX_PORT = 65535;
+const HTTP_FORBIDDEN_URL_CHARS_UTF8_PATTERN = '/[\s\x00-\x1F\x7F]/u';
+const HTTP_FORBIDDEN_URL_CHARS_BYTE_PATTERN = '/[\s\x00-\x1F\x7F]/';
 
 const CURL_ERROR_TIMEOUT = 28; // CURLE_OPERATION_TIMEDOUT
 
@@ -70,9 +74,10 @@ function httpRequest(
         if (isset($target['error'])) {
             return $finish([], $target['error']);
         }
+        $currentUrl = $target['url'];
 
         $request = [
-            'url'    => $currentUrl,
+            'url'    => $target['url'],
             'method' => $method,
             'host'   => $target['host'],
             'port'   => $target['port'],
@@ -129,14 +134,25 @@ function buildHttpResult(string $finalUrl, array $redirects, int $startedAt, arr
 }
 
 /**
- * Проверка адреса перед запросом: только http(s), хост публичный. IP берётся из той же проверки,
- * curl идёт ровно на него (`CURLOPT_RESOLVE`) — DNS нельзя подменить между проверкой и запросом.
+ * Проверка адреса перед запросом: только http(s), хост публичный. Возвращает канонический URL с тем же
+ * нормализованным хостом, что и для `CURLOPT_RESOLVE` — libcurl не делает отдельный DNS-запрос.
  *
- * @return array{host: string, port: int, ip: string}|array{error: string}
+ * @return array{host: string, port: int, ip: string, url: string}|array{error: string}
  */
 function prepareRequestTarget(string $url, callable $resolver): array
 {
+    if (
+        preg_match(HTTP_FORBIDDEN_URL_CHARS_UTF8_PATTERN, $url) === 1
+        || preg_match(HTTP_FORBIDDEN_URL_CHARS_BYTE_PATTERN, $url) === 1
+    ) {
+        return ['error' => "В адресе не должно быть пробелов и служебных символов: {$url}"];
+    }
+
     $parts = parse_url($url);
+    if (!is_array($parts)) {
+        return ['error' => "Некорректный адрес: {$url}"];
+    }
+
     $scheme = strtolower((string) ($parts['scheme'] ?? ''));
 
     if (!isset(HTTP_DEFAULT_PORTS[$scheme])) {
@@ -146,29 +162,53 @@ function prepareRequestTarget(string $url, callable $resolver): array
         return ['error' => "Адрес с логином и паролем не запрашивается: {$url}"];
     }
 
+    $port = (int) ($parts['port'] ?? HTTP_DEFAULT_PORTS[$scheme]);
+    if ($port < HTTP_MIN_PORT || $port > HTTP_MAX_PORT) {
+        return ['error' => "Некорректный порт в адресе: {$url}"];
+    }
+
     $host = normalizeHostName((string) ($parts['host'] ?? ''));
     if ($host === null) {
         return ['error' => "Некорректный хост в адресе: {$url}"];
     }
 
     $resolvedIps = [];
-    $capturingResolver = static function (string $name) use ($resolver, &$resolvedIps): array {
-        $resolvedIps = $resolver($name);
+    $resolverError = null;
+    $capturingResolver = static function (string $name) use ($resolver, &$resolvedIps, &$resolverError): array {
+        try {
+            $resolvedIps = $resolver($name);
+        } catch (Throwable $e) {
+            $resolverError = $e->getMessage() !== '' ? $e->getMessage() : get_class($e);
+            $resolvedIps = [];
+        }
 
         return $resolvedIps;
     };
 
     $hostError = validateSiteHost($host, $capturingResolver);
+    if ($resolverError !== null) {
+        return ['error' => "Не удалось выполнить DNS-запрос ({$resolverError}). Адрес: {$url}"];
+    }
     if ($hostError !== null) {
         return ['error' => "{$hostError} Адрес: {$url}"];
     }
 
     $isIpLiteral = filter_var($host, FILTER_VALIDATE_IP) !== false;
+    $authority = filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false ? "[{$host}]" : $host;
+    $path = isset($parts['path']) && $parts['path'] !== '' ? $parts['path'] : '/';
+    if (!str_starts_with($path, '/')) {
+        $path = '/' . $path;
+    }
+    $canonical = $scheme . '://' . $authority
+        . (isset($parts['port']) ? ':' . $port : '')
+        . $path
+        . (isset($parts['query']) ? '?' . $parts['query'] : '');
 
     return [
         'host' => $host,
-        'port' => (int) ($parts['port'] ?? HTTP_DEFAULT_PORTS[$scheme]),
+        'port' => $port,
         'ip'   => $isIpLiteral ? $host : (string) $resolvedIps[0],
+        'url'  => $canonical,
     ];
 }
 

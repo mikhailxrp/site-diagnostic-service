@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 require_once ROOT_PATH . '/src/Services/DatabaseUpdater.php';
 require_once ROOT_PATH . '/src/Services/FindingFactory.php';
+require_once ROOT_PATH . '/src/Services/DiagnosticNoLongerRunningException.php';
 
 const OUTDATED_SEVERITY = [
     'cms'        => ['outdated' => 'medium', 'unsupported' => 'high'],
@@ -24,8 +25,9 @@ const OUTDATED_DATABASE_KEY = 'latest_versions';
 const OUTDATED_WP_PARENT    = 'wordpress';
 const OUTDATED_PHP_KEY      = 'php';
 
-const OUTDATED_PLUGIN_CACHE_DIR = ROOT_PATH . '/storage/cache/wp-plugins';
-const OUTDATED_PLUGIN_CACHE_TTL = 7 * 24 * 3600; // неделя: каталог плагинов меняется не чаще
+const OUTDATED_PLUGIN_CACHE_DIR           = ROOT_PATH . '/storage/cache/wp-plugins';
+const OUTDATED_PLUGIN_CACHE_TTL           = 7 * 24 * 3600; // неделя: каталог плагинов меняется не чаще
+const WP_PLUGIN_LOOKUP_MAX_PER_DIAGNOSTIC = 30;            // лимит онлайн-запросов к каталогу WP (решение владельца, 20.11.2026)
 
 const OUTDATED_NO_STACK_MESSAGE = 'Нет данных стека: шаг «Определение стека» не выполнен.';
 
@@ -42,7 +44,8 @@ function runOutdatedCheck(
     ?array $database = null,
     ?array $sources = null,
     ?string $cacheDir = null,
-    ?int $now = null
+    ?int $now = null,
+    int $maxPluginLookups = WP_PLUGIN_LOOKUP_MAX_PER_DIAGNOSTIC
 ): array {
     $items = $context['facts']['stack']['items'] ?? null;
     if (!is_array($items)) {
@@ -58,6 +61,9 @@ function runOutdatedCheck(
     $latest = [];
     $findings = [];
     $compared = 0;
+    $onlineLookups = 0;
+    $skippedLookups = 0;
+    $sessionLookups = [];
 
     foreach ($items as $item) {
         $version = normalizeVersion(is_string($item['version'] ?? null) ? $item['version'] : null);
@@ -66,9 +72,31 @@ function runOutdatedCheck(
             continue;
         }
 
-        $known = $target['source'] === VERSION_SOURCE_WP_PLUGIN
-            ? lookupWordpressPlugin($target['slug'], $request, $cacheDir, $now)
-            : ($database['items'][$target['key']] ?? null);
+        if ($target['source'] === VERSION_SOURCE_WP_PLUGIN) {
+            $slug = $target['slug'];
+            if (preg_match(WP_PLUGIN_SLUG_PATTERN, $slug) !== 1) {
+                continue;
+            }
+            if (array_key_exists($slug, $sessionLookups)) {
+                $known = $sessionLookups[$slug];
+            } else {
+                $cached = readWordpressPluginCache($slug, $cacheDir, $now);
+                if ($cached['hit']) {
+                    $known = $cached['latest'] !== null ? ['latest' => $cached['latest']] : null;
+                    $sessionLookups[$slug] = $known;
+                } elseif ($onlineLookups >= max(0, $maxPluginLookups)) {
+                    $skippedLookups++;
+                    continue;
+                } else {
+                    $onlineLookups++;
+                    $known = fetchWordpressPluginCached($slug, $request, $cacheDir, $now);
+                    $sessionLookups[$slug] = $known;
+                }
+            }
+        } else {
+            $known = $database['items'][$target['key']] ?? null;
+        }
+
         $latestVersion = is_array($known) && is_string($known['latest'] ?? null) ? $known['latest'] : null;
         if ($latestVersion === null) {
             continue;
@@ -88,13 +116,14 @@ function runOutdatedCheck(
 
     return [
         'status'   => 'done',
-        'message'  => buildOutdatedMessage($compared, count($findings), $database !== null, $databaseDate),
+        'message'  => buildOutdatedMessage($compared, count($findings), $database !== null, $databaseDate, $skippedLookups),
         'facts'    => [
             'latest'    => $latest,
             'databases' => [OUTDATED_DATABASE_KEY => [
                 'title'      => getDatabaseSources()[OUTDATED_DATABASE_KEY]['title'],
                 'updated_at' => $databaseDate,
             ]],
+            'plugin_lookups_skipped' => $skippedLookups,
         ],
         'findings' => $findings,
     ];
@@ -208,6 +237,55 @@ function makeOutdatedFinding(array $item, string $version, string $latest, array
 }
 
 /**
+ * Читает кэш каталога плагинов WordPress.
+ * `hit = true` — свежий кэш найден (`latest` может быть `null`, если плагина нет в каталоге).
+ *
+ * @return array{hit: bool, latest: ?string}
+ */
+function readWordpressPluginCache(string $slug, string $cacheDir, int $now): array
+{
+    if (preg_match(WP_PLUGIN_SLUG_PATTERN, $slug) !== 1) {
+        return ['hit' => true, 'latest' => null];
+    }
+
+    $cacheFile = $cacheDir . '/' . $slug . '.json';
+    $cached = readDatabaseFile($cacheFile);
+    if ($cached !== null && ($now - (int) ($cached['fetched_at'] ?? 0)) < OUTDATED_PLUGIN_CACHE_TTL) {
+        return ['hit' => true, 'latest' => is_string($cached['version'] ?? null) ? $cached['version'] : null];
+    }
+
+    return ['hit' => false, 'latest' => null];
+}
+
+/**
+ * Запрашивает версию плагина WordPress в каталоге и при штатном ответе сохраняет в кэш.
+ *
+ * @return array{latest: string}|null
+ */
+function fetchWordpressPluginCached(string $slug, callable $request, string $cacheDir, int $now): ?array
+{
+    try {
+        $info = fetchWordpressPluginVersion($slug, $request);
+    } catch (DiagnosticNoLongerRunningException $e) {
+        throw $e;
+    } catch (Throwable) {
+        return null; // каталог недоступен — без находки, в кэш не пишется
+    }
+    if ($info['status'] === WP_PLUGIN_ERROR) {
+        return null;
+    }
+
+    $cacheFile = $cacheDir . '/' . $slug . '.json';
+    try {
+        saveDatabaseFile($cacheFile, ['fetched_at' => $now, 'status' => $info['status'], 'version' => $info['version']]);
+    } catch (Throwable) {
+        // кэш не записался — в следующий раз каталог спросят снова
+    }
+
+    return $info['version'] !== null ? ['latest' => $info['version']] : null;
+}
+
+/**
  * Версия плагина из каталога WordPress с кэшем: ответ «есть» и «нет в каталоге» хранится неделю, сбой сети — нет.
  *
  * @return array{latest: string}|null null — плагина нет в каталоге или каталог не ответил
@@ -218,37 +296,31 @@ function lookupWordpressPlugin(string $slug, callable $request, string $cacheDir
         return null;
     }
 
-    $cacheFile = $cacheDir . '/' . $slug . '.json';
-    $cached = readDatabaseFile($cacheFile);
-    if ($cached !== null && ($now - (int) ($cached['fetched_at'] ?? 0)) < OUTDATED_PLUGIN_CACHE_TTL) {
-        return is_string($cached['version'] ?? null) ? ['latest' => $cached['version']] : null;
+    $cached = readWordpressPluginCache($slug, $cacheDir, $now);
+    if ($cached['hit']) {
+        return $cached['latest'] !== null ? ['latest' => $cached['latest']] : null;
     }
 
-    try {
-        $info = fetchWordpressPluginVersion($slug, $request);
-    } catch (Throwable) {
-        return null; // каталог недоступен — без находки, в кэш не пишется
-    }
-    if ($info['status'] === WP_PLUGIN_ERROR) {
-        return null;
-    }
-
-    try {
-        saveDatabaseFile($cacheFile, ['fetched_at' => $now, 'status' => $info['status'], 'version' => $info['version']]);
-    } catch (Throwable) {
-        // кэш не записался — в следующий раз каталог спросят снова
-    }
-
-    return $info['version'] !== null ? ['latest' => $info['version']] : null;
+    return fetchWordpressPluginCached($slug, $request, $cacheDir, $now);
 }
 
-function buildOutdatedMessage(int $compared, int $outdated, bool $hasDatabase, ?string $databaseDate): string
-{
+function buildOutdatedMessage(
+    int $compared,
+    int $outdated,
+    bool $hasDatabase,
+    ?string $databaseDate,
+    int $skippedPluginLookups = 0
+): string {
     $database = match (true) {
         !$hasDatabase          => 'база версий не загружена',
         $databaseDate === null => 'дата базы версий неизвестна',
         default                => 'база версий от ' . date('d.m.Y', (int) strtotime($databaseDate)),
     };
 
-    return "Сравнено версий: {$compared}, устарело: {$outdated}; {$database}";
+    $message = "Сравнено версий: {$compared}, устарело: {$outdated}; {$database}";
+    if ($skippedPluginLookups > 0) {
+        $message .= "; пропущено по лимиту онлайн-проверки плагинов: {$skippedPluginLookups}";
+    }
+
+    return $message;
 }

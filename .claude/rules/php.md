@@ -1,99 +1,63 @@
 ---
-description: PHP rules for Mini-MVC projects (PHP 8+, no framework)
-globs: ["**/*.php"]
+paths:
+  - "**/*.php"
 ---
 
-## Core principles
+# Правила PHP — Site Diagnostics (Mini-MVC, PHP 8.3)
 
-- PHP 8+ only — use match, named arguments, nullsafe operator
-- Always add `declare(strict_types=1)` at the top of every file
-- Functional style by default — no classes unless justified
-- No spaghetti — logic and HTML must never mix in the same file
+## Базовые принципы
 
-## Structure rules
+- PHP 8.3 (OpenServer), `declare(strict_types=1);` в начале каждого файла.
+- Используй `match`, `??`, именованные аргументы, строгую типизацию параметров и возвращаемых значений.
+- Сохраняй принятый стиль каждого слоя: контроллеры — классы `final class ...Controller` в `namespace App\Controllers`; модели и большинство сервисов — чистые процедурные функции, загружаемые через `require_once ROOT_PATH . '/src/...'`. Не вводи классы там, где слой процедурный, и не ломай существующую структуру.
+- Не смешивай бизнес-логику, SQL и HTML в одном файле.
 
-- public/index.php — front controller only, no business logic
-- src/Controllers/ — handle request, call model, pass data to view
-- src/Models/ — only DB queries, return plain arrays
-- src/Views/ — only HTML + echo, no loops over DB, no business logic
-- src/Core/ — router, request helpers, shared utilities
-- src/Services/ — email, file upload, external APIs
-- config/routes.php — all routes in one place
-- config/config.php — all constants and env loading
+## Структура проекта
 
-## Functions
+- `public/index.php` — единственный front controller: подключает конфиг, регистрирует обработчики ошибок, отправляет security-заголовки, включает PSR-4-автозагрузку `App\*`, запускает сессию и диспетчер роутера. Бизнес-логики здесь нет.
+- `config/config.php` — константы, пути и загрузка `.env` (секреты константами не объявляются — сервисы читают их через `env()` по требованию).
+- `config/routes.php` — все маршруты приложения в одном месте.
+- `config/prompts/` — текстовые промпты для ИИ-задач.
+- `src/Controllers/` — разбор и валидация запроса, CSRF, rate limit, вызов моделей и сервисов, передача готовых массивов в View или redirect с флешем.
+- `src/Models/` — только работа с БД через `getPdo()` и подготовленные запросы; возвращают простые массивы или скаляры.
+- `src/Services/` (`Checks/`, `Ai/`, отчёты, сравнение, браузер, HTTP) — предметная логика. Чистые сервисы (например, `ReportBuilder`, `ClientReportBuilder`, `DiagnosticComparer`) получают готовые массивы и не обращаются к БД, HTTP или сессии.
+- `src/Views/` — только HTML и экранированный вывод (`e()`); запросов к БД и бизнес-логики во Views нет.
+- `src/Core/` — `Database.php`, `Router.php`, `Request.php`, `Logger.php`, `ErrorHandlers.php`, `functions.php`.
+- `bin/` — фоновый CLI-воркер (`worker.php`) и служебные скрипты (`update-databases.php` и др.).
 
-- One function = one job
-- Name functions as verbs: getUser(), saveTransaction()
-- Always validate input at the controller level
-- Return early — avoid deep nesting
+## Функции и контроллеры
 
-## Database
+- Одна функция — одна задача; имена функций начинаются с глагола (`getDiagnosticWithSteps()`, `createDiagnostic()`, `buildDiagnosticComparison()`).
+- Вся валидация входных данных выполняется на уровне контроллера или выделенного валидатора (`UrlValidator` и т. п.).
+- Используй ранний возврат (`return` / `redirect`), избегай глубокой вложенности.
 
-- PDO only — no mysqli
-- Always use prepared statements
-- All DB functions live in src/Models/
-- Return plain arrays from model functions
-- One function = one query
+## База данных
 
-## Views
+- Только PDO (`getPdo()` из `src/Core/Database.php`), без `mysqli`.
+- Все запросы — только через `prepare()` / `execute()` с параметрами.
+- Весь SQL живёт исключительно в `src/Models/` (и в установочном скрипте `database/install.php`).
+- Одна функция модели — одна логическая операция; многотабличные изменения выполняй в транзакции (`beginTransaction` / `commit` / `rollBack`).
 
-- Views receive data as variables — never query DB inside a view
-- Escape all output: htmlspecialchars($var, ENT_QUOTES, 'UTF-8')
-- Use e() helper function as shortcut
+## Views и вывод
 
-## Security
+- Шаблоны получают данные готовыми переменными через `render()`.
+- Все динамические значения экранируются через `e()` (`htmlspecialchars(..., ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')`).
 
-- Never trust user input
-- Use password_hash() / password_verify(); minimum 8 characters,
-  validated before hashing — don't add further complexity rules
-  unless the product explicitly needs them
-- Call `regenerateSession()` right after a successful login (rotates
-  session id and CSRF token — `src/Core/functions.php`), not the raw
-  `session_regenerate_id()` call
-- Login/register/forgot-password error messages never reveal whether
-  an email exists in the system — same generic message for "wrong
-  password" and "no such account" (prevents account enumeration)
-- Log failed login attempts and rate-limit trips with `logWarning()`
-  (context is auto-redacted for password/token/secret — see
-  `src/Core/Logger.php`) for later incident review
-- Session cookies are hardened centrally in `ensureSessionStarted()`
-  (`httponly`, `samesite=Lax`, `secure` when `APP_ENV=production`) —
-  don't override cookie params per-controller. `secure` only works if
-  production is actually served over HTTPS; deploying prod on plain
-  HTTP silently breaks sessions
-- Security response headers (`X-Content-Type-Options`,
-  `X-Frame-Options`, `Content-Security-Policy: frame-ancestors`,
-  `Referrer-Policy`) are sent once for every request via
-  `sendSecurityHeaders()` in `public/index.php` — don't duplicate them
-  per-controller, extend that one function if a new header is needed
-- CSRF token on every state-changing form — render it with
-  `csrfField()`, and call `requireCsrf()` (or
-  `verifyCsrfToken(input('_csrf'))` directly) at the top of every POST
-  handler before touching the Model (`src/Core/functions.php`)
-- Rate-limit login and public form submissions to slow brute-force and
-  spam — guard with `tooManyAttempts('login', 5, 60)` before
-  processing, `hitRateLimit('login')` on a failed attempt, and
-  `clearRateLimit('login')` on success (`src/Core/functions.php`)
-- Admin-only pages and actions check the role (`role = 'admin'`), not
-  just that the user is logged in
+## Безопасность
 
-## Error handling
-
-- Never use @ to suppress errors
-- Log errors to file — never output raw errors in production
-- User sees: friendly message. Log sees: full trace
+- Проект — локальный однопользовательский инструмент без входа, паролей и таблицы `users` (защита периметра — `Require local` в OpenServer). Не добавляй аутентификацию/роли, если об этом не просили.
+- **CSRF обязателен на каждом POST-действии:** выводи `<?= csrfField() ?>` в форме и проверяй `requireCsrf()` или `verifyCsrfToken(input('_csrf'))` в самом начале POST-обработчика до обращения к моделям или сервисам (`src/Core/functions.php`).
+- **Атомарный rate limit:** для защиты ресурсоёмких POST-действий (запуск диагностики, повтор, перезапуск ИИ) используй `takeRateLimitAttempt(string $action, int $maxAttempts, int $decaySeconds = 60): bool` и при необходимости `clearRateLimit(string $action)` из `src/Core/functions.php`. Не пиши раздельные «проверить + инкрементировать» без файловой блокировки.
+- **Сессии и заголовки:** cookie сессии настроены централизованно в `ensureSessionStarted()`, заголовки безопасности — в `sendSecurityHeaders()` (`public/index.php`). Не переопределяй их вручную в контроллерах.
+- **Внешние URL и браузер:** валидируй целевые адреса и редиректы через `UrlValidator` (защита от loopback/приватных сетей/SSRF); при проверке корзины/оформления никогда не отправляй реальные заказы.
+- **Секреты и логи:** никогда не используй `@` для подавления ошибок; пиши ошибки в лог через `logWarning()` / `logError()` / `logException()` (`src/Core/Logger.php`, контекст автоматически редактирует секретные ключи). Пользователь видит понятное флеш-сообщение, подробности и trace — только в `storage/logs/app.log`.
 
 ## Тестирование
 
-- `vendor/` и `composer.lock` не лежат в шаблоне — при первом запуске
-  тестов в новом проекте, если `vendor/` отсутствует, сначала выполни
-  `composer install`, и только потом `composer test`
-- PHPUnit — dev-зависимость через Composer, не деплоится на прод
-  (`composer install --no-dev` для боевого сервера)
-- Юнит-тестами покрывается только логика без обращения к БД и без
-  HTTP-контекста (работа с `$_SESSION` в CLI допустима): хелперы
-  `src/Core/functions.php` (CSRF, rate-limit, `normalizeUserId`, `e()`,
-  `regenerateSession`), сопоставление маршрутов `src/Core/Router.php`,
-  расчёты над массивами
-- Тесты на Model-функции, которые ходят в БД — отдельная категория
+- Всегда запускай тесты на PHP 8.3 OpenServer (у системного `php` в `PATH` могут отсутствовать `intl` и `gd`, что ломает тесты `idn_to_ascii()` и `imagecreatetruecolor()`):
+  ```powershell
+  & "C:\OSPanel\modules\PHP-8.3\PHP\php.exe" vendor/bin/phpunit
+  ```
+  (или `composer test`, если PHP 8.3 OpenServer находится первым в `PATH`).
+- При отсутствии `vendor/` сначала выполни `composer install`.
+- Юнит-тесты в `tests/Unit/` не обращаются к реальной БД, внешнему интернету и реальному Chrome (работа с `$_SESSION` и временными файлами в CLI допустима).

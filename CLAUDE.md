@@ -1,12 +1,9 @@
 # CLAUDE.md
 
-Основной регламент проекта находится в `AGENTS.md`.
+@AGENTS.md
 
-Перед работой прочитай `AGENTS.md` и соблюдай его вместе с обязательными тематическими правилами:
+## Примечание для Claude Code
 
-- `.claude/rules/general.md`;
-- `.claude/rules/php.md` — для PHP;
-- `.claude/rules/design.md` — для UI, Views, CSS и JS;
-- `.docs/dod-global.md` — критерии готовности.
-
-Этот файл сохранён для совместимости с инструментами, которые ищут `CLAUDE.md`. Не дублируй здесь правила из `AGENTS.md` и тематических документов.
+- Основной регламент подключён выше из `AGENTS.md` (единая точка входа для Claude Code и Antigravity).
+- Тематические правила из `.claude/rules/` (`general.md`, `php.md`, `design.md`) подгружаются Claude Code автоматически и остаются единым источником правил для обеих сред.
+- Не дублируй правила из `AGENTS.md` и `.claude/rules/` в этом файле.

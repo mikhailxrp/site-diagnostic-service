@@ -127,4 +127,68 @@ final class OsvClientTest extends TestCase
             }
         }
     }
+
+    public function testAffectedVersionsOnlyAndAlongsideGitRange(): void
+    {
+        $body = json_encode(['vulns' => [
+            [
+                'id'       => 'GHSA-git-and-versions',
+                'summary'  => 'PrestaShop advisory',
+                'affected' => [[
+                    'package'  => ['name' => 'prestashop/prestashop'],
+                    'ranges'   => [['type' => 'GIT', 'events' => [['introduced' => 'abc123']]]],
+                    'versions' => ['1.7.8.0', 'v1.7.8.2', 'dev-main'],
+                ]],
+            ],
+            [
+                'id'       => 'GHSA-versions-only',
+                'summary'  => 'Exact versions only',
+                'affected' => [[
+                    'package'  => ['name' => 'prestashop/prestashop'],
+                    'versions' => ['1.7.8.0', '3.0.0-beta.4'],
+                ]],
+            ],
+        ]]);
+
+        $records = parseOsvResponse((string) $body, 'prestashop/prestashop');
+        $this->assertCount(2, $records);
+
+        [$withGit, $onlyVersions] = $records;
+        $this->assertSame([
+            ['from' => '1.7.8.0', 'to' => '1.7.8.0', 'from_inclusive' => true, 'to_inclusive' => true],
+            ['from' => '1.7.8.2', 'to' => '1.7.8.2', 'from_inclusive' => true, 'to_inclusive' => true],
+        ], $withGit['ranges']);
+        $this->assertTrue(isVersionVulnerable('1.7.8.0', $withGit));
+        $this->assertTrue(isVersionVulnerable('1.7.8.2', $withGit));
+        $this->assertFalse(isVersionVulnerable('1.7.8.1', $withGit));
+
+        $this->assertTrue(isVersionVulnerable('1.7.8.0', $onlyVersions));
+        $this->assertTrue(isVersionVulnerable('3.0.0-beta.4', $onlyVersions));
+        $this->assertFalse(isVersionVulnerable('1.7.8.1', $onlyVersions));
+        $this->assertFalse(isVersionVulnerable('3.0.0', $onlyVersions));
+    }
+
+    public function testAffectedVersionsAlreadyCoveredByRangeAreNotDuplicated(): void
+    {
+        $body = json_encode(['vulns' => [[
+            'id'       => 'GHSA-mixed',
+            'summary'  => 'Range plus extra exact version',
+            'affected' => [[
+                'package'  => ['name' => 'prestashop/prestashop'],
+                'ranges'   => [['type' => 'ECOSYSTEM', 'events' => [['introduced' => '1.0.0'], ['fixed' => '1.5.0']]]],
+                'versions' => ['1.2.0', '2.0.0'],
+            ]],
+        ]]]);
+
+        [$record] = parseOsvResponse((string) $body, 'prestashop/prestashop');
+
+        $this->assertSame([
+            ['from' => '1.0.0', 'to' => '1.5.0', 'from_inclusive' => true, 'to_inclusive' => false],
+            ['from' => '2.0.0', 'to' => '2.0.0', 'from_inclusive' => true, 'to_inclusive' => true],
+        ], $record['ranges']);
+        $this->assertTrue(isVersionVulnerable('1.2.0', $record));
+        $this->assertTrue(isVersionVulnerable('2.0.0', $record));
+        $this->assertFalse(isVersionVulnerable('1.5.0', $record));
+        $this->assertFalse(isVersionVulnerable('2.0.1', $record));
+    }
 }

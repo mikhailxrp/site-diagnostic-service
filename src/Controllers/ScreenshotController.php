@@ -31,6 +31,8 @@ final class ScreenshotController
 
     private function send(string $id, bool $thumbnail): void
     {
+        closeSessionWrite();
+
         $screenshotId = parseScreenshotId($id);
         if ($screenshotId === null) {
             $this->notFound();

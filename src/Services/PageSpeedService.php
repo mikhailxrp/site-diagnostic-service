@@ -70,7 +70,7 @@ function buildPageSpeedUrl(string $url, string $strategy): string
 /**
  * Ключ без лишних символов: перевод строки в нём дал бы чужой заголовок запроса.
  */
-function isValidPageSpeedKey(string $key): bool
+function isValidPageSpeedKey(#[\SensitiveParameter] string $key): bool
 {
     return preg_match(PAGESPEED_KEY_PATTERN, $key) === 1;
 }
@@ -78,7 +78,7 @@ function isValidPageSpeedKey(string $key): bool
 /**
  * @return list<string>
  */
-function buildPageSpeedHeaders(string $key): array
+function buildPageSpeedHeaders(#[\SensitiveParameter] string $key): array
 {
     return [PAGESPEED_KEY_HEADER . ': ' . $key];
 }
@@ -90,8 +90,12 @@ function buildPageSpeedHeaders(string $key): array
  * @param callable(string $strategy): void|null $afterEach
  * @return array{url: string, results: array<string, ?array>, errors: array<string, string>}
  */
-function runPageSpeed(string $url, string $key, callable $api, ?callable $afterEach = null): array
-{
+function runPageSpeed(
+    string $url,
+    #[\SensitiveParameter] string $key,
+    callable $api,
+    ?callable $afterEach = null
+): array {
     $results = [];
     $errors = [];
 
@@ -115,7 +119,7 @@ function runPageSpeed(string $url, string $key, callable $api, ?callable $afterE
  * @param callable(string $url, list<string> $headers): array{status: ?int, body: string, error: ?string} $api
  * @return array{result: ?array, error: ?string}
  */
-function fetchPageSpeed(string $url, string $strategy, string $key, callable $api): array
+function fetchPageSpeed(string $url, string $strategy, #[\SensitiveParameter] string $key, callable $api): array
 {
     $response = $api(buildPageSpeedUrl($url, $strategy), buildPageSpeedHeaders($key));
     $status = $response['status'] ?? null;
@@ -162,7 +166,7 @@ function limitPageSpeedError(string $text): string
     return mb_substr($text, 0, PAGESPEED_ERROR_MAX_LENGTH);
 }
 
-function redactPageSpeedKey(string $text, string $key): string
+function redactPageSpeedKey(string $text, #[\SensitiveParameter] string $key): string
 {
     return $key === '' ? $text : str_replace($key, PAGESPEED_REDACTED, $text);
 }

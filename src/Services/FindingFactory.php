@@ -31,8 +31,9 @@ const FINDING_DEFAULT_SEVERITY = [
     'hypothesis'      => 'info',
 ];
 
-const FINDING_TITLE_MAX_LENGTH    = 255;  // как findings.title VARCHAR(255)
-const FINDING_LOCATION_MAX_LENGTH = 2048; // как findings.location VARCHAR(2048)
+const FINDING_TITLE_MAX_LENGTH    = 255;   // как findings.title VARCHAR(255)
+const FINDING_LOCATION_MAX_LENGTH = 2048;  // как findings.location VARCHAR(2048)
+const FINDING_DETAILS_MAX_BYTES   = 60000; // запас под findings.details TEXT (65 535 байт)
 
 const FINGERPRINT_SEPARATOR = "\n";
 
@@ -68,9 +69,13 @@ function makeFinding(
         'source'      => FINDING_SOURCE_CHECK,
         'category'    => $category,
         'severity'    => $severity,
-        'title'       => mb_substr($title, 0, FINDING_TITLE_MAX_LENGTH),
-        'details'     => $details,
-        'location'    => $location !== null ? mb_substr($location, 0, FINDING_LOCATION_MAX_LENGTH) : null,
+        'title'       => mb_substr(mb_scrub($title, 'UTF-8'), 0, FINDING_TITLE_MAX_LENGTH, 'UTF-8'),
+        'details'     => $details !== null
+            ? mb_strcut(mb_scrub($details, 'UTF-8'), 0, FINDING_DETAILS_MAX_BYTES, 'UTF-8')
+            : null,
+        'location'    => $location !== null
+            ? mb_substr(mb_scrub($location, 'UTF-8'), 0, FINDING_LOCATION_MAX_LENGTH, 'UTF-8')
+            : null,
         'evidence'    => $evidence,
         'fingerprint' => buildFingerprint($category, $location, $key),
     ];

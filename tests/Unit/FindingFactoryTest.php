@@ -72,6 +72,33 @@ final class FindingFactoryTest extends TestCase
         $this->assertSame(FINDING_TITLE_MAX_LENGTH, mb_strlen($finding['title']));
     }
 
+    public function testLongDetailsIsTruncatedByBytesAndRemainsValidUtf8(): void
+    {
+        $raw = str_repeat('я', 50000) . "\xC0" . str_repeat('я', 50000);
+        $finding = makeFinding('vulnerability', 'Много уязвимостей', null, 'many', $raw);
+        $nullFinding = makeFinding('seo', 'Без описания', null, 'none', null);
+
+        $this->assertNotNull($finding['details']);
+        $this->assertLessThanOrEqual(FINDING_DETAILS_MAX_BYTES, strlen($finding['details']));
+        $this->assertGreaterThanOrEqual(FINDING_DETAILS_MAX_BYTES - 4, strlen($finding['details']));
+        $this->assertTrue(mb_check_encoding($finding['details'], 'UTF-8'));
+        $this->assertNull($nullFinding['details']);
+    }
+
+    public function testInvalidUtf8InTitleAndLocationIsScrubbedAndTruncated(): void
+    {
+        $dirtyTitle = "Заголовок \xC0 " . str_repeat('б', FINDING_TITLE_MAX_LENGTH + 20);
+        $dirtyLocation = "https://shop.test/\xC0/" . str_repeat('x', FINDING_LOCATION_MAX_LENGTH + 20);
+
+        $finding = makeFinding('broken_resource', $dirtyTitle, $dirtyLocation, '404');
+
+        $this->assertTrue(mb_check_encoding($finding['title'], 'UTF-8'));
+        $this->assertSame(FINDING_TITLE_MAX_LENGTH, mb_strlen($finding['title'], 'UTF-8'));
+        $this->assertNotNull($finding['location']);
+        $this->assertTrue(mb_check_encoding($finding['location'], 'UTF-8'));
+        $this->assertSame(FINDING_LOCATION_MAX_LENGTH, mb_strlen($finding['location'], 'UTF-8'));
+    }
+
     public function testFingerprintIsStableForSameFinding(): void
     {
         $this->assertSame(

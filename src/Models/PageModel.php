@@ -8,6 +8,16 @@ declare(strict_types=1);
 
 require_once ROOT_PATH . '/src/Core/Database.php';
 
+const CHECKED_PAGE_URL_MAX_LENGTH = 2048; // как checked_pages.url VARCHAR(2048)
+
+/**
+ * Очищает адрес от невалидных байтов UTF-8 и усекает до длины колонки `checked_pages.url`.
+ */
+function normalizeCheckedPageUrl(string $url): string
+{
+    return mb_substr(mb_scrub($url, 'UTF-8'), 0, CHECKED_PAGE_URL_MAX_LENGTH, 'UTF-8');
+}
+
 /**
  * @param array{url: string, page_type: string, found_by: string, http_code?: ?int, response_ms?: ?int,
  *              blocked?: bool} $page
@@ -21,7 +31,7 @@ function insertCheckedPage(int $diagnosticId, array $page): int
     );
     $statement->execute([
         'diagnostic_id' => $diagnosticId,
-        'url'           => $page['url'],
+        'url'           => normalizeCheckedPageUrl($page['url']),
         'page_type'     => $page['page_type'],
         'found_by'      => $page['found_by'],
         'http_code'     => $page['http_code'] ?? null,

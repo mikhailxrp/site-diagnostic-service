@@ -96,4 +96,28 @@ final class FunctionsTest extends TestCase
         $this->assertNotSame($oldId, session_id());
         $this->assertArrayNotHasKey('csrf_token', $_SESSION);
     }
+
+    public function testCloseSessionWriteReleasesLockAndSetFlashReopensSession(): void
+    {
+        ob_start();
+        try {
+            ensureSessionStarted();
+            $_SESSION['preserved_key'] = 'ok';
+            $sessionId = session_id();
+
+            closeSessionWrite();
+            $this->assertSame(PHP_SESSION_NONE, session_status());
+
+            setFlash('error', 'boom');
+            $this->assertSame(PHP_SESSION_ACTIVE, session_status());
+            $this->assertSame($sessionId, session_id());
+            $this->assertSame('ok', $_SESSION['preserved_key'] ?? null);
+            $this->assertSame('boom', getFlash('error'));
+        } finally {
+            closeSessionWrite();
+            if (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+        }
+    }
 }

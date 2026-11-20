@@ -12,6 +12,7 @@ declare(strict_types=1);
  */
 
 require_once ROOT_PATH . '/src/Services/HtmlParser.php';
+require_once ROOT_PATH . '/src/Services/HttpClient.php';
 require_once ROOT_PATH . '/src/Services/FindingFactory.php';
 require_once ROOT_PATH . '/src/Services/Checks/BotProtectionCheck.php';
 
@@ -62,8 +63,10 @@ const SEO_HTTP_OK_MIN       = 200;
 const SEO_HTTP_REDIRECT_MIN = 300;
 const SEO_HTTP_SERVER_ERROR = 500;
 const SEO_HTML_SNIFF_BYTES  = 512; // начало ответа, по которому видно HTML вместо robots.txt
-const SEO_GZIP_MAGIC        = "\x1f\x8b";
-const SEO_BAD_LOC_EXAMPLES  = 5; // сколько неправильных записей sitemap показать в находке
+const SEO_GZIP_MAGIC              = "\x1f\x8b";
+const SEO_SITEMAP_MAX_DECODED_BYTES = HTTP_MAX_BODY_BYTES; // 5 МБ после распаковки (как у HTTP-клиента)
+const SEO_MAX_SITEMAP_CANDIDATES  = 5; // лимит директив Sitemap: из robots.txt (решение владельца, 20.11.2026)
+const SEO_BAD_LOC_EXAMPLES        = 5; // сколько неправильных записей sitemap показать в находке
 
 const SEO_NO_HOME_MESSAGE = 'Нет данных главной страницы: шаг «Доступность сайта» не выполнен.';
 
@@ -179,11 +182,13 @@ function checkRobotsTxt(string $origin, callable $request, ?array $botRules): ar
  * @return array{groups: list<array{agents: list<string>, rules: list<array{type: string, path: string}>}>,
  *               sitemaps: list<string>}
  */
-function parseRobotsTxt(string $text): array
+function parseRobotsTxt(string $text, int $maxSitemaps = SEO_MAX_SITEMAP_CANDIDATES): array
 {
     $groups = [];
     $sitemaps = [];
+    $seenSitemaps = [];
     $current = null;
+    $maxSitemaps = max(1, $maxSitemaps);
 
     foreach (preg_split('/\r\n|\r|\n/', $text) ?: [] as $line) {
         $line = trim(explode('#', $line, 2)[0]);
@@ -195,7 +200,8 @@ function parseRobotsTxt(string $text): array
         $key = strtolower($key);
 
         if ($key === 'sitemap') {
-            if ($value !== '' && !in_array($value, $sitemaps, true)) {
+            if ($value !== '' && !isset($seenSitemaps[$value]) && count($sitemaps) < $maxSitemaps) {
+                $seenSitemaps[$value] = true;
                 $sitemaps[] = $value;
             }
             continue;
@@ -260,10 +266,17 @@ function findRobotsDisallowAll(array $groups): array
  * @param list<string> $robotsSitemaps
  * @return array{facts: array, findings: list<array>}
  */
-function checkSitemap(string $origin, array $robotsSitemaps, callable $request, ?array $botRules): array
-{
+function checkSitemap(
+    string $origin,
+    array $robotsSitemaps,
+    callable $request,
+    ?array $botRules,
+    int $maxCandidates = SEO_MAX_SITEMAP_CANDIDATES
+): array {
     $source = $robotsSitemaps !== [] ? SEO_SOURCE_ROBOTS : SEO_SOURCE_DEFAULT;
-    $candidates = $robotsSitemaps !== [] ? $robotsSitemaps : [$origin . '/sitemap.xml'];
+    $candidates = $robotsSitemaps !== []
+        ? array_slice($robotsSitemaps, 0, max(1, $maxCandidates))
+        : [$origin . '/sitemap.xml'];
     $facts = [
         'url'            => $candidates[0],
         'status'         => null,
@@ -404,8 +417,31 @@ function isSitemapUrl(string $loc): bool
 }
 
 /**
- * XML-sitemap → тип и адреса `<loc>`. Сжатый gzip распаковывается. Обрезанный по размеру ответ не разбирается
- * как XML (он заведомо неполный) — адреса считаются по тегам. null — не sitemap или битый XML.
+ * Распаковывает gzip-тело sitemap с жёстким пределом размера (защита от gzip-бомбы).
+ * null — повреждённый поток или размер после распаковки превышает `$maxBytes`.
+ */
+function decodeSitemapGzip(string $body, int $maxBytes = SEO_SITEMAP_MAX_DECODED_BYTES): ?string
+{
+    set_error_handler(static fn (): bool => true);
+    try {
+        $decoded = gzdecode($body, $maxBytes + 1);
+    } catch (Throwable) {
+        $decoded = false;
+    } finally {
+        restore_error_handler();
+    }
+
+    if ($decoded === false || strlen($decoded) > $maxBytes) {
+        return null;
+    }
+
+    return $decoded;
+}
+
+/**
+ * XML-sitemap → тип и адреса `<loc>`. Сжатый gzip распаковывается с пределом `SEO_SITEMAP_MAX_DECODED_BYTES`.
+ * Обрезанный по размеру ответ не разбирается как XML (он заведомо неполный) — адреса считаются по тегам.
+ * null — не sitemap, превышен лимит распаковки или битый XML.
  *
  * @param array<string, mixed> $response
  * @return array{is_index: bool, locs: list<string>, truncated: bool}|null
@@ -416,12 +452,8 @@ function parseSitemap(array $response): ?array
     $truncated = !empty($response['truncated']);
 
     if (str_starts_with($body, SEO_GZIP_MAGIC)) {
-        try {
-            $decoded = gzdecode($body);
-        } catch (Throwable) {
-            $decoded = false; // воркер превращает предупреждения в исключения
-        }
-        if ($decoded === false) {
+        $decoded = decodeSitemapGzip($body);
+        if ($decoded === null) {
             return null;
         }
         $body = $decoded;

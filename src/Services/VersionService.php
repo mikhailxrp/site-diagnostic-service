@@ -9,6 +9,8 @@ declare(strict_types=1);
 /** Номер версии: 2–4 числовые части, необязательный патч `-pN` (Magento); `20231105` или хэш — не версия */
 const VERSION_PATTERN = '~^v?(\d{1,4}(?:\.\d{1,6}){1,3})(?:[-.]?(p\d{1,3}))?(?![\d.])~i';
 const VERSION_UNSTABLE_PATTERN = '~(alpha|beta|\brc|-rc|rc\d|dev|preview|snapshot|nightly)~i';
+const VERSION_LEADING_V_PATTERN = '~^v(?=\d)~';
+const VERSION_TRAILING_ZEROS_PATTERN = '~(?:\.0+)+(?=$|[-+])~';
 
 /**
  * Номер версии без лишнего: `v3.6.0` → `3.6.0`, `1.12.4-aem` → `1.12.4`, `2.4.7-p3` → `2.4.7-p3`; не версия → null.
@@ -32,11 +34,23 @@ function isStableVersion(string $version): bool
 }
 
 /**
- * <0, 0, >0 как у version_compare; обе версии нормализуются.
+ * Каноническая форма для сравнения: нижний регистр, без ведущей `v`, без хвостовых `.0` в числовой части,
+ * но с сохранением суффиксов `-dev` / `-alpha` / `-beta` / `-rc` / `-pN` (`6.4.0` → `6.4`, `6.0.0-rc1` → `6-rc1`).
+ */
+function canonicalVersionForCompare(string $version): string
+{
+    $version = strtolower(trim($version));
+    $version = (string) preg_replace(VERSION_LEADING_V_PATTERN, '', $version);
+
+    return (string) preg_replace(VERSION_TRAILING_ZEROS_PATTERN, '', $version);
+}
+
+/**
+ * <0, 0, >0 как у version_compare; обе версии приводятся к канонической форме для сравнения.
  */
 function compareVersions(string $a, string $b): int
 {
-    return version_compare(normalizeVersion($a) ?? $a, normalizeVersion($b) ?? $b);
+    return version_compare(canonicalVersionForCompare($a), canonicalVersionForCompare($b));
 }
 
 /**

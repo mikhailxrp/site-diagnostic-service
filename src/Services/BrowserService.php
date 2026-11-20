@@ -14,10 +14,13 @@ declare(strict_types=1);
 use HeadlessChromium\Browser;
 use HeadlessChromium\BrowserFactory;
 use HeadlessChromium\Clip;
+use HeadlessChromium\Communication\Connection;
 use HeadlessChromium\Communication\Message;
+use HeadlessChromium\Communication\Session;
 use HeadlessChromium\Exception\OperationTimedOut;
 use HeadlessChromium\Page;
 
+require_once ROOT_PATH . '/src/Services/BrowserRequestGuard.php';
 require_once ROOT_PATH . '/src/Services/Checks/BrowserConsoleCheck.php';
 require_once ROOT_PATH . '/src/Services/ScreenshotService.php';
 
@@ -67,6 +70,12 @@ const BROWSER_NO_LIBRARY_MESSAGE = 'Пропущено: библиотека chr
 const BROWSER_NO_PAGES_MESSAGE   = 'Пропущено: нет страниц, которые можно открыть в браузере.';
 const BROWSER_UNAVAILABLE_PREFIX = 'Пропущено: Chrome недоступен — ';
 
+const BROWSER_BLOCK_REASON                  = 'BlockedByClient';
+const BROWSER_DISABLE_POPUP_BLOCKING_SWITCH = '--disable-popup-blocking';
+const BROWSER_BLOCK_NEW_CONTENTS_FLAG       = '--block-new-web-contents';
+const BROWSER_SSRF_BLOCKED_ERROR            = 'Запрос к локальному или недопустимому адресу заблокирован';
+const BROWSER_CHILD_CONTAINER_TYPES         = ['iframe', 'page'];
+
 /**
  * Установлен ли `chrome-php/chrome` (`vendor/autoload.php` подключён и пакет есть).
  */
@@ -92,12 +101,15 @@ function buildViewportOverride(int $width): array
 
 /**
  * Параметры `BrowserFactory::createBrowser()`. User-Agent не подменяется: Chrome представляется сам.
+ * Убираем `--disable-popup-blocking` и включаем `--block-new-web-contents`, чтобы вкладка не открывала
+ * новые окна в обход перехвата.
  *
+ * @param array<string, mixed> $extraOptions
  * @return array<string, mixed>
  */
-function buildBrowserOptions(string $profileDir, int $startupTimeoutSeconds): array
+function buildBrowserOptions(string $profileDir, int $startupTimeoutSeconds, array $extraOptions = []): array
 {
-    return [
+    $options = [
         'headless'                => true,
         'windowSize'              => [BROWSER_WINDOW_WIDTH, BROWSER_WINDOW_HEIGHT],
         'userDataDir'             => $profileDir,
@@ -105,6 +117,30 @@ function buildBrowserOptions(string $profileDir, int $startupTimeoutSeconds): ar
         'sendSyncDefaultTimeout'  => BROWSER_COMMAND_TIMEOUT_MS,
         'ignoreCertificateErrors' => true, // проблемы SSL ловит SslCheck; страница всё равно должна открыться
         'keepAlive'               => false,
+        'excludedSwitches'        => [BROWSER_DISABLE_POPUP_BLOCKING_SWITCH],
+        'customFlags'             => [BROWSER_BLOCK_NEW_CONTENTS_FLAG],
+    ];
+
+    foreach (['excludedSwitches', 'customFlags'] as $listKey) {
+        if (isset($extraOptions[$listKey]) && is_array($extraOptions[$listKey])) {
+            $options[$listKey] = array_values(array_unique([...$options[$listKey], ...$extraOptions[$listKey]]));
+        }
+        unset($extraOptions[$listKey]);
+    }
+
+    return array_merge($options, $extraOptions);
+}
+
+/**
+ * Опции запуска Chrome для печати PDF: локальный HTML без JS и без игнорирования ошибок сертификатов.
+ *
+ * @return array<string, mixed>
+ */
+function buildBrowserPdfLaunchOptions(): array
+{
+    return [
+        'disableJavascript'       => true,
+        'ignoreCertificateErrors' => false,
     ];
 }
 
@@ -184,6 +220,23 @@ function buildBrowserStepMessage(
 }
 
 /**
+ * Время изменения папки профиля; null — папку уже удалил другой процесс.
+ */
+function getBrowserProfileModifiedTime(string $path): ?int
+{
+    set_error_handler(static fn (): bool => true);
+    try {
+        $modified = filemtime($path);
+    } catch (Throwable) {
+        $modified = false;
+    } finally {
+        restore_error_handler();
+    }
+
+    return $modified === false ? null : $modified;
+}
+
+/**
  * Удаляет папки профилей `chrome-*` старше суток (остались от убитого воркера).
  *
  * @return int сколько удалено
@@ -193,8 +246,8 @@ function removeStaleBrowserProfiles(?int $now = null, string $baseDir = BROWSER_
     $now ??= time();
     $removed = 0;
     foreach (glob($baseDir . '/' . BROWSER_PROFILE_PREFIX . '*', GLOB_ONLYDIR | GLOB_NOSORT) ?: [] as $dir) {
-        $modified = filemtime($dir);
-        if ($modified !== false && $now - $modified > BROWSER_PROFILE_MAX_AGE_SECONDS && removeBrowserProfileDir($dir, $baseDir)) {
+        $modified = getBrowserProfileModifiedTime($dir);
+        if ($modified !== null && $now - $modified > BROWSER_PROFILE_MAX_AGE_SECONDS && removeBrowserProfileDir($dir, $baseDir)) {
             $removed++;
         }
     }
@@ -275,10 +328,15 @@ function removeDirectoryTree(string $dir): bool
  * Запускает Chrome без окна с новой папкой профиля. Ошибка запуска → исключение с понятным текстом
  * (папка профиля в этом случае уже удалена).
  *
+ * @param array<string, mixed> $extraOptions
  * @return array{browser: Browser, profile_dir: string}
  */
-function launchBrowser(string $chromePath, int $ownerId, int $startupTimeoutSeconds): array
-{
+function launchBrowser(
+    string $chromePath,
+    int $ownerId,
+    int $startupTimeoutSeconds,
+    array $extraOptions = []
+): array {
     if (!isBrowserLibraryAvailable()) {
         throw new RuntimeException('библиотека chrome-php не установлена (composer install).');
     }
@@ -290,7 +348,9 @@ function launchBrowser(string $chromePath, int $ownerId, int $startupTimeoutSeco
     $profileDir = createBrowserProfileDir($ownerId);
 
     try {
-        $browser = (new BrowserFactory($chromePath))->createBrowser(buildBrowserOptions($profileDir, $startupTimeoutSeconds));
+        $browser = (new BrowserFactory($chromePath))->createBrowser(
+            buildBrowserOptions($profileDir, $startupTimeoutSeconds, $extraOptions)
+        );
     } catch (OperationTimedOut) {
         removeBrowserProfileDir($profileDir);
         throw new RuntimeException("Chrome не ответил за {$startupTimeoutSeconds} с.");
@@ -336,15 +396,196 @@ function getBrowserVersion(Browser $browser): ?string
 }
 
 /**
+ * Подключает перехват всех запросов вкладки, дочерних фреймов/воркеров (`Target.setAutoAttach`) и закрытие
+ * всплывающих окон (`Target.targetCreated`). При исключении в `$shouldAllow` срабатывает безопасно (`failRequest`).
+ *
+ * Возвращает функцию очистки слушателей и дочерних сессий (без вызова `Fetch.disable`, чтобы перехват
+ * оставался активным до закрытия вкладки).
+ *
+ * @param callable(array<string, mixed>, Session): bool $shouldAllow
+ * @param callable(Throwable, array<string, mixed>): void|null $onError
+ * @return callable(): void
+ */
+function attachBrowserRequestInterception(Page $page, callable $shouldAllow, ?callable $onError = null): callable
+{
+    $session = $page->getSession();
+    $connection = $session->getConnection();
+    $pageTargetId = $session->getTargetId();
+    /** @var array<string, Session> $childSessions */
+    $childSessions = [];
+
+    $attachSession = static function (Session $targetSession, bool $isRoot, string $targetType) use (
+        &$attachSession,
+        &$childSessions,
+        $connection,
+        $shouldAllow,
+        $onError
+    ): void {
+        $targetSession->on('method:Fetch.requestPaused', static function (array $params) use (
+            $targetSession,
+            $shouldAllow,
+            $onError
+        ): void {
+            $requestId = (string) ($params['requestId'] ?? '');
+            if ($requestId === '') {
+                return;
+            }
+            try {
+                $allowed = (bool) $shouldAllow($params, $targetSession);
+                $targetSession->sendMessage($allowed
+                    ? new Message('Fetch.continueRequest', ['requestId' => $requestId])
+                    : new Message('Fetch.failRequest', [
+                        'requestId'   => $requestId,
+                        'errorReason' => BROWSER_BLOCK_REASON,
+                    ]));
+            } catch (Throwable $e) {
+                if ($onError !== null) {
+                    $onError($e, $params);
+                }
+                try {
+                    $targetSession->sendMessage(new Message('Fetch.failRequest', [
+                        'requestId'   => $requestId,
+                        'errorReason' => BROWSER_BLOCK_REASON,
+                    ]));
+                } catch (Throwable) {
+                    // запрос останется приостановленным до закрытия вкладки и не уйдёт в сеть
+                }
+            }
+        });
+
+        if ($isRoot || in_array($targetType, BROWSER_CHILD_CONTAINER_TYPES, true)) {
+            $targetSession->on('method:Target.attachedToTarget', static function (array $params) use (
+                &$attachSession,
+                &$childSessions,
+                $connection,
+                $onError
+            ): void {
+                $childSessionId = (string) ($params['sessionId'] ?? '');
+                $targetInfo = is_array($params['targetInfo'] ?? null) ? $params['targetInfo'] : [];
+                $childTargetId = (string) ($targetInfo['targetId'] ?? '');
+                $childType = (string) ($targetInfo['type'] ?? '');
+                $waiting = !empty($params['waitingForDebugger']);
+                if ($childSessionId === '' || isset($childSessions[$childSessionId])) {
+                    return;
+                }
+
+                try {
+                    $childSession = $connection->createSession($childTargetId, $childSessionId);
+                    $childSessions[$childSessionId] = $childSession;
+                    $attachSession($childSession, false, $childType);
+                    if ($waiting) {
+                        $childSession->sendMessage(new Message('Runtime.runIfWaitingForDebugger'));
+                    }
+                } catch (Throwable $e) {
+                    if ($onError !== null) {
+                        $onError($e, $params);
+                    }
+                }
+            });
+
+            $targetSession->on('method:Target.detachedFromTarget', static function (array $params) use (&$childSessions): void {
+                $detachedSessionId = (string) ($params['sessionId'] ?? '');
+                if ($detachedSessionId === '' || !isset($childSessions[$detachedSessionId])) {
+                    return;
+                }
+                $child = $childSessions[$detachedSessionId];
+                unset($childSessions[$detachedSessionId]);
+                try {
+                    $child->destroy();
+                } catch (Throwable) {
+                    // сессия уже закрыта
+                }
+            });
+        }
+
+        $fetchParams = ['patterns' => [['urlPattern' => '*', 'requestStage' => 'Request']]];
+        $autoAttachParams = ['autoAttach' => true, 'waitForDebuggerOnStart' => true, 'flatten' => true];
+        $bypassParams = ['bypass' => true];
+
+        if ($isRoot) {
+            $bypassResponse = $targetSession->sendMessageSync(
+                new Message('Network.setBypassServiceWorker', $bypassParams),
+                BROWSER_COMMAND_TIMEOUT_MS
+            );
+            if (!$bypassResponse->isSuccessful()) {
+                throw new RuntimeException('обход Service Worker не включился: ' . $bypassResponse->getErrorMessage());
+            }
+
+            $fetchResponse = $targetSession->sendMessageSync(
+                new Message('Fetch.enable', $fetchParams),
+                BROWSER_COMMAND_TIMEOUT_MS
+            );
+            if (!$fetchResponse->isSuccessful()) {
+                throw new RuntimeException('перехват запросов не включился: ' . $fetchResponse->getErrorMessage());
+            }
+
+            $attachResponse = $targetSession->sendMessageSync(
+                new Message('Target.setAutoAttach', $autoAttachParams),
+                BROWSER_COMMAND_TIMEOUT_MS
+            );
+            if (!$attachResponse->isSuccessful()) {
+                throw new RuntimeException('перехват дочерних целей не включился: ' . $attachResponse->getErrorMessage());
+            }
+
+            return;
+        }
+
+        // Внутри Target.attachedToTarget только асинхронный sendMessage(): иначе readLine() реентрантно заблокируется.
+        $targetSession->sendMessage(new Message('Fetch.enable', $fetchParams));
+        if (in_array($targetType, BROWSER_CHILD_CONTAINER_TYPES, true)) {
+            $targetSession->sendMessage(new Message('Network.setBypassServiceWorker', $bypassParams));
+            $targetSession->sendMessage(new Message('Target.setAutoAttach', $autoAttachParams));
+        }
+    };
+
+    $popupGuard = static function (array $params) use ($connection, $pageTargetId): void {
+        $targetInfo = is_array($params['targetInfo'] ?? null) ? $params['targetInfo'] : [];
+        $targetId = (string) ($targetInfo['targetId'] ?? '');
+        if (($targetInfo['type'] ?? '') !== 'page' || $targetId === '' || $targetId === $pageTargetId) {
+            return;
+        }
+        try {
+            $connection->sendMessage(new Message('Target.closeTarget', ['targetId' => $targetId]));
+        } catch (Throwable) {
+            // окно уже закрылось или заблокировано --block-new-web-contents
+        }
+    };
+    $connection->on(Connection::EVENT_TARGET_CREATED, $popupGuard);
+
+    $cleanup = static function () use ($connection, $popupGuard, &$childSessions): void {
+        $connection->removeListener(Connection::EVENT_TARGET_CREATED, $popupGuard);
+        foreach ($childSessions as $child) {
+            try {
+                $child->destroy();
+            } catch (Throwable) {
+                // сессия уже уничтожена
+            }
+        }
+        $childSessions = [];
+    };
+
+    try {
+        $attachSession($session, true, 'page');
+    } catch (Throwable $e) {
+        $cleanup();
+        throw $e;
+    }
+
+    return $cleanup;
+}
+
+/**
  * Открывает страницу в новой вкладке на ширине `$width`. Открыта — когда готов DOM (`DOMContentLoaded`); `load` ждём
  * ещё не дольше BROWSER_LOAD_WAIT_AFTER_DOM_MS (медленный сторонний ресурс задерживает `load` на десятки секунд —
  * страница при этом рабочая; `load_ms = null` — не дождались), затем BROWSER_SETTLE_MS ловим поздние ошибки.
+ * Все сетевые запросы и редиректы проверяются через `isBrowserRequestAllowed()` на уровне CDP-перехвата.
  * Сетевая ошибка (`net::ERR_NAME_NOT_RESOLVED` и т. п.) — `error`: Chrome показал бы свою страницу ошибки, и
  * `waitForNavigation()` из `chrome-php` счёл бы её загруженной. Не бросает исключений: итог — в результате.
  * События DevTools сводятся `applyBrowserEvent()`; пришедшие после ожидания не учитываются.
  * `$capture` — открывшаяся страница снимается до закрытия вкладки (`captureBrowserScreenshots()`): итог в
  * `screenshot`, ошибка снимка — в `screenshot_error` (загрузка при этом остаётся открытой).
  *
+ * @param callable(string $host): list<string>|null $resolver
  * @return array{url: string, width: int, status: string, dom_ms: ?int, load_ms: ?int, error: ?string,
  *               events: list<array<string, mixed>>, dropped: int,
  *               screenshot?: array{image: string, thumbnail: string, truncated: bool}, screenshot_error?: string}
@@ -354,17 +595,36 @@ function openBrowserPage(
     string $url,
     int $width = BROWSER_WINDOW_WIDTH,
     int $timeoutMs = BROWSER_PAGE_TIMEOUT_MS,
-    bool $capture = false
+    bool $capture = false,
+    ?callable $resolver = null
 ): array {
-    $page = null;
-    $state = createBrowserEventState(null);
-    $collecting = true;
+    $cachedResolver = createCachedBrowserResolver($resolver ?? 'resolveHostIps');
     $result = ['url' => $url, 'width' => $width, 'status' => BROWSER_PAGE_OPENED, 'dom_ms' => null, 'load_ms' => null,
         'error' => null];
+    if (!isBrowserRequestAllowed($url, $cachedResolver)) {
+        logWarning('Запрос Chrome заблокирован защитой от SSRF', [
+            'url'   => sanitizeBrowserLogUrl($url),
+            'stage' => 'navigate',
+        ]);
+        $result['status'] = BROWSER_PAGE_ERROR;
+        $result['error'] = BROWSER_SSRF_BLOCKED_ERROR;
+
+        return $result + ['events' => [], 'dropped' => 0];
+    }
+
+    $connection = $browser->getConnection();
+    $wasStrict = $connection->isStrict();
+    $connection->setStrict(false);
+    $page = null;
+    $cleanupInterception = null;
+    $state = createBrowserEventState(null);
+    $collecting = true;
+    $guardState = ['blocked_main_document' => false];
 
     try {
         $page = $browser->createPage();
-        $state = createBrowserEventState($page->getFrameManager()->getMainFrame()->getFrameId());
+        $mainFrameId = $page->getFrameManager()->getMainFrame()->getFrameId();
+        $state = createBrowserEventState($mainFrameId);
         $session = $page->getSession();
         foreach (BROWSER_COLLECTED_EVENTS as $method) {
             $session->on('method:' . $method, static function (array $params) use (&$state, &$collecting, $method): void {
@@ -376,8 +636,49 @@ function openBrowserPage(
         $session->sendMessageSync(new Message('Log.enable'), BROWSER_COMMAND_TIMEOUT_MS);
         $page->setDeviceMetricsOverride(buildViewportOverride($width))->await(BROWSER_COMMAND_TIMEOUT_MS);
 
-        $result = array_merge($result, navigateBrowserPage($page, $url, $timeoutMs));
+        $cleanupInterception = attachBrowserRequestInterception(
+            $page,
+            static function (array $params) use ($cachedResolver, $mainFrameId, &$guardState): bool {
+                $request = is_array($params['request'] ?? null) ? $params['request'] : [];
+                $reqUrl = (string) ($request['url'] ?? '');
+                $resourceType = (string) ($params['resourceType'] ?? '');
+                if (isBrowserRequestAllowed($reqUrl, $cachedResolver)) {
+                    return true;
+                }
+
+                logWarning('Запрос Chrome заблокирован защитой от SSRF', [
+                    'url'           => sanitizeBrowserLogUrl($reqUrl),
+                    'resource_type' => $resourceType,
+                ]);
+                if ($resourceType === BROWSER_DOCUMENT_TYPE && ($params['frameId'] ?? null) === $mainFrameId) {
+                    $guardState['blocked_main_document'] = true;
+                }
+
+                return false;
+            },
+            static function (Throwable $e, array $params): void {
+                $request = is_array($params['request'] ?? null) ? $params['request'] : [];
+                logException($e, [
+                    'service' => 'browser',
+                    'action'  => 'request_guard',
+                    'url'     => sanitizeBrowserLogUrl((string) ($request['url'] ?? '')),
+                ]);
+            }
+        );
+
+        $result = array_merge($result, navigateBrowserPage(
+            $page,
+            $url,
+            $timeoutMs,
+            static function () use (&$guardState): bool {
+                return $guardState['blocked_main_document'];
+            }
+        ));
         $collecting = false;
+        if ($guardState['blocked_main_document']) {
+            $result['status'] = BROWSER_PAGE_ERROR;
+            $result['error'] = BROWSER_SSRF_BLOCKED_ERROR;
+        }
         if ($capture && $result['status'] === BROWSER_PAGE_OPENED) {
             try {
                 $result['screenshot'] = captureBrowserScreenshots($page, $width);
@@ -397,6 +698,10 @@ function openBrowserPage(
                 // вкладка закроется вместе с браузером
             }
         }
+        if ($cleanupInterception !== null) {
+            $cleanupInterception();
+        }
+        $connection->setStrict($wasStrict);
     }
 
     return $result + ['events' => $state['events'], 'dropped' => $state['dropped']];
@@ -439,9 +744,10 @@ function captureBrowserScreenshots(Page $page, int $width): array
  * после — BROWSER_SETTLE_MS чтения событий.
  * Новая навигация (JS-редирект) подменяет ожидаемую, как в нестрогом режиме `chrome-php`.
  *
+ * @param callable(): bool|null $shouldAbort
  * @return array{status: string, dom_ms?: int, load_ms?: int, error?: string}
  */
-function navigateBrowserPage(Page $page, string $url, int $timeoutMs): array
+function navigateBrowserPage(Page $page, string $url, int $timeoutMs, ?callable $shouldAbort = null): array
 {
     $started = hrtime(true);
     $elapsedMs = static fn (): int => intdiv(hrtime(true) - $started, 1000000);
@@ -455,6 +761,9 @@ function navigateBrowserPage(Page $page, string $url, int $timeoutMs): array
     $reader = $session->sendMessage(new Message('Page.navigate', ['url' => $url]));
     while (!$reader->hasResponse()) {
         $reader->checkForResponse();
+        if ($shouldAbort !== null && $shouldAbort()) {
+            return ['status' => BROWSER_PAGE_ERROR, 'error' => BROWSER_SSRF_BLOCKED_ERROR];
+        }
         if (!$reader->hasResponse()) {
             if ($elapsedMs() >= $timeoutMs) {
                 return $timeout;
@@ -477,6 +786,9 @@ function navigateBrowserPage(Page $page, string $url, int $timeoutMs): array
     foreach (['dom_ms' => Page::DOM_CONTENT_LOADED, 'load_ms' => Page::LOAD] as $key => $event) {
         while (true) {
             $lifecycle = $page->getCurrentLifecycle();
+            if ($shouldAbort !== null && $shouldAbort()) {
+                return ['status' => BROWSER_PAGE_ERROR, 'error' => BROWSER_SSRF_BLOCKED_ERROR];
+            }
             $latest = $frame->getLatestLoaderId();
             if ($latest !== $loaderId && $latest !== $previousLoaderId) {
                 $loaderId = $latest;
@@ -502,6 +814,9 @@ function navigateBrowserPage(Page $page, string $url, int $timeoutMs): array
     $settleUntil = $elapsedMs() + BROWSER_SETTLE_MS;
     while ($elapsedMs() < $settleUntil) {
         $session->getConnection()->readData();
+        if ($shouldAbort !== null && $shouldAbort()) {
+            return ['status' => BROWSER_PAGE_ERROR, 'error' => BROWSER_SSRF_BLOCKED_ERROR];
+        }
         usleep(BROWSER_POLL_INTERVAL_US);
     }
 
@@ -558,21 +873,69 @@ function buildBrowserPdfOptions(): array
 }
 
 /**
- * Печатает только file:// HTML в новом профиле. Вкладка, Chrome и профиль закрываются при любом исходе.
+ * Печатает только локальный `file:///` HTML в новом профиле без JS и без выхода в сеть.
+ * Вкладка, Chrome и профиль закрываются при любом исходе.
  */
 function printBrowserHtmlToPdf(string $chromePath, string $htmlUri, string $pdfPath, int $ownerId): void
 {
-    if (!str_starts_with($htmlUri, 'file://')) {
+    $scheme = strtolower((string) parse_url($htmlUri, PHP_URL_SCHEME));
+    if ($scheme !== 'file' || !isBrowserPdfRequestAllowed($htmlUri)) {
         throw new InvalidArgumentException('PDF можно печатать только из локального HTML-файла.');
     }
 
     set_time_limit(BROWSER_PDF_TIME_LIMIT_SECONDS);
-    $session = launchBrowser($chromePath, $ownerId, BROWSER_PDF_STARTUP_TIMEOUT_SECONDS);
+    $session = launchBrowser($chromePath, $ownerId, BROWSER_PDF_STARTUP_TIMEOUT_SECONDS, buildBrowserPdfLaunchOptions());
+    $connection = $session['browser']->getConnection();
+    $wasStrict = $connection->isStrict();
+    $connection->setStrict(false);
     $page = null;
+    $cleanupInterception = null;
+    $blockedMain = false;
 
     try {
         $page = $session['browser']->createPage();
-        $navigation = navigateBrowserPage($page, $htmlUri, BROWSER_PDF_PAGE_TIMEOUT_MS);
+        $mainFrameId = $page->getFrameManager()->getMainFrame()->getFrameId();
+        $cleanupInterception = attachBrowserRequestInterception(
+            $page,
+            static function (array $params) use ($mainFrameId, &$blockedMain): bool {
+                $request = is_array($params['request'] ?? null) ? $params['request'] : [];
+                $reqUrl = (string) ($request['url'] ?? '');
+                $resourceType = (string) ($params['resourceType'] ?? '');
+                if (isBrowserPdfRequestAllowed($reqUrl)) {
+                    return true;
+                }
+
+                logWarning('PDF: сетевой или недопустимый запрос заблокирован', [
+                    'url'           => sanitizeBrowserLogUrl($reqUrl),
+                    'resource_type' => $resourceType,
+                ]);
+                if ($resourceType === BROWSER_DOCUMENT_TYPE && ($params['frameId'] ?? null) === $mainFrameId) {
+                    $blockedMain = true;
+                }
+
+                return false;
+            },
+            static function (Throwable $e, array $params): void {
+                $request = is_array($params['request'] ?? null) ? $params['request'] : [];
+                logException($e, [
+                    'service' => 'browser',
+                    'action'  => 'pdf_request_guard',
+                    'url'     => sanitizeBrowserLogUrl((string) ($request['url'] ?? '')),
+                ]);
+            }
+        );
+
+        $navigation = navigateBrowserPage(
+            $page,
+            $htmlUri,
+            BROWSER_PDF_PAGE_TIMEOUT_MS,
+            static function () use (&$blockedMain): bool {
+                return $blockedMain;
+            }
+        );
+        if ($blockedMain) {
+            throw new RuntimeException(BROWSER_SSRF_BLOCKED_ERROR);
+        }
         if ($navigation['status'] !== BROWSER_PAGE_OPENED) {
             throw new RuntimeException('Локальный HTML не загрузился: ' . ($navigation['error'] ?? 'неизвестная ошибка'));
         }
@@ -586,6 +949,10 @@ function printBrowserHtmlToPdf(string $chromePath, string $htmlUri, string $pdfP
                 logException($e, ['service' => 'browser', 'action' => 'close_pdf_page']);
             }
         }
+        if ($cleanupInterception !== null) {
+            $cleanupInterception();
+        }
+        $connection->setStrict($wasStrict);
         closeBrowser($session);
     }
 }

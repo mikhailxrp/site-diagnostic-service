@@ -263,6 +263,78 @@ final class ShopCrawlerTest extends TestCase
         $this->assertStringStartsWith('Найдено: категория, товар; не найдено: корзина, оформление; запросов:', $result['message']);
     }
 
+    public function testLargeDiscardedCandidatesDoNotAccumulateInMemory(): void
+    {
+        $links = '';
+        for ($i = 1; $i <= 60; $i++) {
+            $links .= "<a href=\"/catalog/cat-{$i}/\">Каталог {$i}</a>";
+        }
+        $links .= '<a href="/catalog/valid/">Каталог рабочий</a>';
+
+        $context = $this->context('generic');
+        $context['facts']['availability']['home']['body'] = "<html><body>{$links}</body></html>";
+
+        $validCategoryHtml = $this->fixture('generic', 'category');
+        $seq = 0;
+        $transport = static function (string $url) use ($validCategoryHtml, &$seq): array {
+            if ($url === self::ORIGIN . '/catalog/valid/') {
+                return [
+                    'final_url' => $url, 'status' => 200, 'headers' => [], 'body' => $validCategoryHtml,
+                    'truncated' => false, 'redirects' => [], 'time_ms' => 10, 'error' => null,
+                ];
+            }
+            if (str_starts_with($url, self::ORIGIN . '/catalog/cat-')) {
+                $seq++;
+
+                return [
+                    'final_url' => $url, 'status' => 200, 'headers' => [],
+                    'body'      => "<!-- {$seq} --><html><body><h1>Пусто</h1>" . str_repeat('x', 5 * 1024 * 1024) . '</body></html>',
+                    'truncated' => false, 'redirects' => [], 'time_ms' => 10, 'error' => null,
+                ];
+            }
+
+            return [
+                'final_url' => $url, 'status' => 404, 'headers' => [], 'body' => 'Not found',
+                'truncated' => false, 'redirects' => [], 'time_ms' => 10, 'error' => null,
+            ];
+        };
+
+        gc_collect_cycles();
+        $beforeUsage = memory_get_usage();
+        $beforePeak = memory_get_peak_usage();
+
+        $result = crawlShopPages($context, $transport);
+
+        gc_collect_cycles();
+        $afterUsage = memory_get_usage();
+        $afterPeak = memory_get_peak_usage();
+
+        $this->assertSame('done', $result['status']);
+        $this->assertSame(self::ORIGIN . '/catalog/valid/', $result['facts']['pages']['category']['url']);
+        $this->assertSame($validCategoryHtml, $result['facts']['pages']['category']['body']);
+        $this->assertLessThan(64 * 1024 * 1024, $afterUsage - $beforeUsage);
+        $this->assertLessThan(64 * 1024 * 1024, $afterPeak - $beforePeak);
+    }
+
+    public function testSharedCartAndCheckoutPageIsRequestedOnceAndKeepsBody(): void
+    {
+        $context = $this->context('generic');
+        $context['facts']['availability']['home']['body'] = '<html><body><a href="/basket/">Оформление заказа</a></body></html>';
+        $sharedHtml = '<html><body><h1>Корзина и оформление заказа</h1></body></html>';
+
+        $result = crawlShopPages($context, $this->request(['/basket/' => $sharedHtml]));
+        $basketRequests = array_filter(
+            $this->requested,
+            static fn (string $url): bool => $url === self::ORIGIN . '/basket/'
+        );
+
+        $this->assertCount(1, $basketRequests);
+        $this->assertSame(self::ORIGIN . '/basket/', $result['facts']['pages']['cart']['url']);
+        $this->assertSame(self::ORIGIN . '/basket/', $result['facts']['pages']['checkout']['url']);
+        $this->assertSame($sharedHtml, $result['facts']['pages']['cart']['body']);
+        $this->assertSame($sharedHtml, $result['facts']['pages']['checkout']['body']);
+    }
+
     /**
      * @param list<array<string, string>>|null $stack
      * @return array<string, mixed>
